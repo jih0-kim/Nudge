@@ -48,6 +48,17 @@ export class Store {
         message_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', completed_at INTEGER,
         UNIQUE(user_id, message_id)
       );
+      CREATE TABLE IF NOT EXISTS demo_data_users (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS demo_email_runs (
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+        started_at INTEGER NOT NULL, interval_seconds REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE IF NOT EXISTS demo_email_arrivals (
+        run_id INTEGER NOT NULL REFERENCES demo_email_runs(id), sequence INTEGER NOT NULL,
+        arrived_at INTEGER NOT NULL, PRIMARY KEY(run_id, sequence)
+      );
     `);
     const columns = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[];
     if (!columns.some((column) => column.name === 'message_id')) this.db.exec('ALTER TABLE jobs ADD COLUMN message_id TEXT');
@@ -75,6 +86,34 @@ export class Store {
   setMemory(user: number, memory: string) {
     if (typeof memory !== 'string' || memory.length > 16_000) throw new Error('Memory must be at most 16000 characters');
     this.db.prepare('UPDATE users SET memory = ? WHERE id = ?').run(memory, user);
+  }
+
+  demoDataEnabled(user: number): boolean {
+    return Boolean(this.db.prepare('SELECT user_id FROM demo_data_users WHERE user_id = ?').get(user));
+  }
+
+  setDemoDataEnabled(user: number, enabled: boolean) {
+    if (enabled) this.db.prepare('INSERT OR IGNORE INTO demo_data_users(user_id) VALUES (?)').run(user);
+    else {
+      this.db.prepare('DELETE FROM demo_data_users WHERE user_id = ?').run(user);
+      this.stopDemoSimulation(user);
+    }
+  }
+
+  demoSimulation(user: number) {
+    return this.db.prepare('SELECT * FROM demo_email_runs WHERE user_id = ? ORDER BY id DESC LIMIT 1').get(user) as
+      { id: number; user_id: number; started_at: number; interval_seconds: number; active: number } | undefined;
+  }
+
+  stopDemoSimulation(user: number) {
+    this.db.prepare('UPDATE demo_email_runs SET active = 0 WHERE user_id = ?').run(user);
+    this.db.prepare("UPDATE jobs SET status = 'cancelled', text = '', reply = NULL WHERE user_id = ? AND kind = 'demo_email' AND status = 'pending'").run(user);
+  }
+
+  demoEmailJobCurrent(jobId: number, user: number) {
+    const run = this.demoSimulation(user);
+    if (!this.demoDataEnabled(user) || !run?.active) return false;
+    return Boolean(this.db.prepare("SELECT id FROM jobs WHERE id = ? AND user_id = ? AND event_id LIKE ?").get(jobId, user, `demo-email:${run.id}:%`));
   }
 
   setTimezone(user: number, timezone: string) {
@@ -128,7 +167,15 @@ export class Store {
   }
 
   openQuest(user: number) {
-    return this.db.prepare("SELECT message_id FROM conversation_quests WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1").get(user) as { message_id: string } | undefined;
+    return this.db.prepare("SELECT id, message_id, text FROM conversation_quests WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1").get(user) as { id: number; message_id: string; text: string } | undefined;
+  }
+
+  queueSleepUpdate(user: number, messageId: string, reply: string) {
+    // Update the existing quest once, without an AI call or another Slack message.
+    return this.db.prepare(`INSERT OR IGNORE INTO jobs(event_id, user_id, kind, text, reply, message_id, available_at)
+      SELECT 'pet-sleep-image:' || id, user_id, 'pet_sleep', '', ?, message_id, ? FROM conversation_quests
+      WHERE user_id = ? AND message_id = ? AND status = 'open'`)
+      .run(reply, Date.now(), user, messageId).changes > 0;
   }
 
   questProgress(user: number) {

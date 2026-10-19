@@ -42,6 +42,16 @@ Only the requesting person's checkmark on this bot's quest counts; checkmarks on
 ordinary replies do nothing. Ask Nudge for a quest to begin. Slow checks never
 overlap another pass. The older file-based quest/demo commands remain separate.
 
+**Incoming-email demo:** `demo live` in Slack opts your user into the fictional
+inbox/calendar and simulates three emails (one now, then 60 seconds apart).
+Arrivals automatically trigger email-grounded quests through the normal worker;
+unchanged inboxes stay silent. The agent must read both source tools before
+suggesting a task, and auto-arrival turns have no mutation tools. `/demo` shows
+the arrivals without reloading. Configure pacing with
+`NUDGLING_DEMO_EMAIL_INTERVAL_SECONDS`; `demo stop` stops arrivals, and `demo off`
+also disables fictional data. Nothing reads or sends real Gmail. See
+[the presenter guide](docs/DEMO.md).
+
 **Pet growth:** `status` reads your own confirmed quest completions from SQLite,
 including quests completed before this status integration was added. Each unique
 ✅-completed quest counts once. Completion replies include the real pet stage and
@@ -53,7 +63,24 @@ longer shows unrelated sample habits from the old file-based demo.
 Both pet flows use the level-00 through level-66 GIFs. Native demo milestones map
 to the matching artwork, so Child, Teen, and Adult no longer reuse the hatchling.
 
+**Sleepy mood:** an unfinished quest turns your pet's status 😴 sleepy after 60
+seconds by default. The 20-second loop updates the existing quest message once
+(no AI call or extra notification). Growth is never lost. Completing or skipping
+the quest clears its sleepy state. Configure `NUDGLING_SLEEP_AFTER_SECONDS` in
+`.env`, then restart; use `86400` for 24 hours or `0` to disable it. With a public
+HTTPS `APP_BASE_URL`, the quest's picture changes to a sleepy pet with closed eyes
+and Zzz marks, served from `/pet-images/level-NN-sleepy.png`. Without a public image
+origin, status still shows sleepy text. Completing the quest restores the growth GIF.
+
 ### Optional bounded demo
+
+The main app includes a **fictional Gmail inbox and calendar at `/demo`**
+(for example `http://localhost:3000/demo` with the default port). DM the real
+Nudge bot **`demo on`** to let its coach read that same data. Ask for a quest,
+then react ✅ in Slack as usual: completions and pet growth are real, not
+simulated in the browser. `demo off` disables fictional data for your user.
+No Google account is needed; live AI coaching still requires the normal Slack
+and AI configuration. See [the three-minute hackathon script](docs/DEMO.md).
 
 ```sh
 npm run demo:live -- 180
@@ -136,7 +163,7 @@ Open **Connected apps** from the setup page, or DM `connections` to Nudge to rec
 
 Operators must set `APP_BASE_URL` to the public HTTPS origin and configure `COMPOSIO_GMAIL_AUTH_CONFIG_ID`, `COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID`, and/or `COMPOSIO_GITHUB_AUTH_CONFIG_ID`. Create each OAuth auth config in the same Composio project, review its scopes, and enable the corresponding provider. Apps without an auth config remain disabled. Check Google verification and GitHub organization/SSO requirements before public rollout; prefer read-only and repository-scoped permissions where available.
 
-This release connects accounts, checks status, and removes connections from Nudge and Composio. The coach can **list repositories** from each person’s connected GitHub account: ask “what repos do I have?” or send `repos` (`repos 2` for another page). Reads are account-bound, permission-limited and read-only; no repository changes or pull requests are supported. Repository metadata may enter AI context when requested. Email and calendar data tools are not implemented. Users can additionally revoke provider grants in Google/GitHub settings. No raw OAuth credentials for these integrations are stored in Nudge. Keep SQLite private: it contains hashed browser credentials and connected-account references.
+This release connects accounts, checks status, and removes connections from Nudge and Composio. The coach can **list repositories** from each person’s connected GitHub account: ask “what repos do I have?” or send `repos` (`repos 2` for another page). Reads are account-bound, permission-limited and read-only; no repository changes or pull requests are supported. Repository metadata may enter AI context when requested. Real email and calendar data tools are not implemented; `demo on` exposes only the fictional fixtures at `/demo`, not connected Google accounts. Users can additionally revoke provider grants in Google/GitHub settings. No raw OAuth credentials for these integrations are stored in Nudge. Keep SQLite private: it contains hashed browser credentials and connected-account references.
 
 Add the values from `.env.example` to your local `.env`. Integrations initialize only when called, so the server still starts without API keys. Never commit your `.env`.
 

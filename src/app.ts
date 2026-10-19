@@ -3,6 +3,8 @@ import { setupRoutes, type SetupDependencies } from './surfaces/setup.js';
 import { appsRoutes } from './surfaces/apps.js';
 import type { AppConnections } from './services/app-connections.js';
 import { slackRoutes, type DirectSlackWebhook } from './surfaces/slack.js';
+import { demoRoutes } from './demo/routes.js';
+import { petImageRoutes } from './surfaces/pet-images.js';
 
 export function createApp(slack?: DirectSlackWebhook, setup?: SetupDependencies, connections?: AppConnections) {
   const app = new Hono();
@@ -21,6 +23,8 @@ export function createApp(slack?: DirectSlackWebhook, setup?: SetupDependencies,
   );
 
   app.get('/health', (c) => c.json({ ok: true }));
+  app.route('/pet-images', petImageRoutes());
+  app.route('/demo', demoRoutes(slack?.store));
 
   if (slack) app.route('/webhooks', slackRoutes(slack));
   // Keep each surface's error handler local. Hono route() otherwise copies the

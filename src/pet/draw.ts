@@ -183,6 +183,7 @@ export function drawPet(level: number, mood: Mood = "normal"): string {
     shadow +
     stars(l) +
     pet +
+    (mood === "sleepy" ? `<g aria-label="Sleeping" fill="none" stroke="#8196BC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M146 30h12l-12 13h12 M164 18h9l-9 10h9 M178 9h7l-7 8h7"/></g>` : "") +
     `</svg>`
   );
 }

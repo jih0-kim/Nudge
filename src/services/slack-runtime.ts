@@ -6,6 +6,8 @@ import type { DirectSlackWebhook } from '../surfaces/slack.js';
 import type { SlackInstallation } from './slack-setup.js';
 import type { AppConnections } from './app-connections.js';
 import { observeConversation } from '../core/conversation-loop.js';
+import { personalPetStatus, withPersonalPetStatus } from '../core/personal-pet.js';
+import { advanceDemoSimulation } from './demo-simulation.js';
 
 export interface SlackConfig {
   signingSecret?: string;
@@ -84,6 +86,8 @@ export class SlackRuntime {
     if (!sender || !this.workspaceId) return;
     for (const user of this.store.conversationUsers().filter((u) => u.team_id === this.workspaceId)) {
       try {
+        // Simulation is independent of Slack history reads; arrivals are durable jobs.
+        advanceDemoSimulation(this.store, user.id);
         const target = { workspaceId: user.team_id, channelId: user.channel_id };
         const { messages, botId } = await sender.conversation(target);
         let changed = observeConversation(this.store, user, messages, botId);
@@ -91,6 +95,10 @@ export class SlackRuntime {
         if (open && !messages.some((m) => m.ts === open.message_id)) {
           const older = await sender.conversation(target, open.message_id);
           changed = observeConversation(this.store, user, older.messages, older.botId) || changed;
+        }
+        const pet = personalPetStatus(this.store, user.id);
+        if (pet.mood === 'sleepy' && open) {
+          changed = this.store.queueSleepUpdate(user.id, open.message_id, withPersonalPetStatus(open.text, pet)) || changed;
         }
         if (changed) await this.tick();
       } catch { console.warn('Conversation update check failed', JSON.stringify({ userId: user.id })); }

@@ -19,10 +19,18 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
       const timing = (stage: string) => console.log('Slack job timing', JSON.stringify({ jobId: job.id, stage, elapsedMs: Date.now() - startedAt }));
       try {
         const user = store.getUser(job.user_id);
+        if (job.kind === 'demo_email' && !store.demoEmailJobCurrent(job.id, user.id)) {
+          store.finish(job);
+          return;
+        }
+        if (job.kind === 'pet_sleep' && store.openQuest(user.id)?.message_id !== job.message_id) {
+          store.finish(job);
+          return;
+        }
         const target = { workspaceId: user.team_id, channelId: user.channel_id };
         let response = job.reply;
         let messageId = job.message_id ?? undefined;
-        if ((job.kind === 'message' || job.kind === 'quest_completion' || job.kind === 'quest_skip') && response === null && !messageId && sender.start) {
+        if ((job.kind === 'message' || job.kind === 'quest_completion' || job.kind === 'quest_skip' || job.kind === 'demo_email') && response === null && !messageId && sender.start) {
           try {
             messageId = await sender.start(target, job.id);
             store.saveMessageId(job.id, messageId);
@@ -30,7 +38,7 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
           } catch { /* A missing progress indicator must never prevent a reply. */ }
         }
         if (response === null) {
-          try { response = await reply(store, user, job.text, undefined, { questCompleted: job.kind === 'quest_completion', questSkipped: job.kind === 'quest_skip' }); }
+          try { response = await reply(store, user, job.text, undefined, { questCompleted: job.kind === 'quest_completion', questSkipped: job.kind === 'quest_skip', demoEmail: job.kind === 'demo_email' }); }
           catch (error) {
             // Do not replay model mutations on network delivery retries.
             response = 'My AI response failed just now—this is a server problem, not your message. Simple commands such as "help" still work. If you asked me to save or change something, check "memory", "reminders", or "progress" before retrying.';
@@ -41,6 +49,11 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
           }
           store.saveReply(job.id, response);
           timing('reply-prepared');
+        }
+        if (job.kind === 'demo_email' && !store.demoEmailJobCurrent(job.id, user.id)) {
+          if (messageId) await sender.send(target, 'Fictional email simulation stopped. No new quest was created.', job.id, messageId);
+          store.finish(job);
+          return;
         }
         await sender.send(target, response, job.id, messageId);
         if (messageId && isQuestReply(response)) store.trackQuest(user.id, messageId, splitPetImage(response).text);

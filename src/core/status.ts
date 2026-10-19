@@ -17,6 +17,19 @@ export function petGifUrl(level: number): string {
   return `${GIF_BASE}/level-${String(Math.max(0, Math.min(66, level))).padStart(2, "0")}.gif`;
 }
 
+export function sleepyPetImageUrl(level: number): string {
+  const base = petImageOrigin();
+  if (!base) return petGifUrl(level);
+  return `${base}/pet-images/level-${String(Math.max(0, Math.min(66, Math.round(level)))).padStart(2, '0')}-sleepy.png`;
+}
+
+function petImageOrigin(): string | undefined {
+  try {
+    const url = new URL(process.env.APP_BASE_URL || '');
+    return url.protocol === 'https:' && !url.username && !url.password ? url.origin : undefined;
+  } catch { return undefined; }
+}
+
 /**
  * Coach replies are plain strings (queued and retried as text), so an image rides along as a first-line marker
  * that the Slack sender turns into an image block. Only our own pet GIFs are accepted, so model output can't
@@ -30,7 +43,11 @@ export function withPetImage(url: string, text: string): string {
 
 export function splitPetImage(text: string): { imageUrl?: string; text: string } {
   const m = MARKER.exec(text);
-  if (!m || !m[1].startsWith(`${GIF_BASE}/`)) return { text };
+  if (!m) return { text };
+  const origin = petImageOrigin();
+  const localPath = origin && m[1].startsWith(`${origin}/pet-images/`) ? m[1].slice(`${origin}/pet-images/`.length) : '';
+  const localPet = /^level-(?:[0-5]\d|6[0-6])-sleepy\.png$/.test(localPath);
+  if (!m[1].startsWith(`${GIF_BASE}/`) && !localPet) return { text };
   return { imageUrl: m[1], text: text.slice(m[0].length) };
 }
 
