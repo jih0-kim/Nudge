@@ -98,7 +98,7 @@ function stars(level: number): string {
 
 /** Three Z's drifting up from the top right while sleepy (paths, no fonts). */
 function zzz(): string {
-  return [0, 1, 2]
+  const marks = [0, 1, 2]
     .map((i) => {
       const k = 0.7 + i * 0.25;
       const drift = `<animateTransform attributeName="transform" type="translate" values="0 6;0 -6" dur="4s" begin="${-i * 1.33}s" repeatCount="indefinite"/>`;
@@ -106,6 +106,7 @@ function zzz(): string {
       return `<g transform="translate(${142 + i * 13},${n(62 - i * 18)}) scale(${n(k)})"><g>${drift}${fade}<path d="M-5,-5 H5 L-5,5 H5" fill="none" stroke="${C.line}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></g></g>`;
     })
     .join("");
+  return `<g aria-label="Sleeping">${marks}</g>`;
 }
 
 function eggShape(h: number, w: number): string {
@@ -199,7 +200,7 @@ export function drawPet(level: number, mood: Mood = "normal"): string {
     shadow +
     stars(l) +
     pet +
-    (mood === "sleepy" ? `<g aria-label="Sleeping" fill="none" stroke="#8196BC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M146 30h12l-12 13h12 M164 18h9l-9 10h9 M178 9h7l-7 8h7"/></g>` : "") +
+    (mood === "sleepy" ? zzz() : "") +
     `</svg>`
   );
 }
