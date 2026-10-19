@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node.js / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+.env.*
+!.env.example
