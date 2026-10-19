@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import { Store } from '../src/core/store.js';
 import { AppConnections, type ConnectionProvider } from '../src/services/app-connections.js';
 import { createApp } from '../src/app.js';
@@ -100,7 +101,19 @@ test('connected-apps page has secure forms, private sessions, and all three prov
   assert.doesNotMatch(html, /account-nudge/);
   assert.equal((await request('/apps/gmail/connect', { csrf: 'forged' }, cookie)).status, 400);
   const csrf = html.match(/name="csrf" value="([a-f0-9]+)"/)![1]!;
-  assert.equal((await request('/apps/gmail/connect', { csrf }, cookie)).status, 303);
+   const connect = await request('/apps/gmail/connect', { csrf }, cookie);
+   assert.equal(connect.status, 200);
+   assert.equal(connect.headers.get('location'), null);
+   const handoff = await connect.text();
+   assert.match(handoff, /Continue to Gmail authorization/);
+   assert.match(handoff, /href="https:\/\/connect.composio.dev\/approve"/);
+   assert.match(handoff, /href="\/apps"/);
+   const script = handoff.match(/<script nonce="([^"]+)">([\s\S]*?)<\/script>/)!;
+   assert.ok(connect.headers.get('content-security-policy')!.includes(`script-src 'nonce-${script[1]}'`));
+   assert.ok(connect.headers.get('content-security-policy')!.includes(`style-src 'nonce-${script[1]}'`));
+   let destination = '';
+   runInNewContext(script[2], { window: { location: { replace: (url: string) => { destination = url; } } } });
+   assert.equal(destination, 'https://connect.composio.dev/approve');
   const completed = await app.request(`https://nudge.example/apps/callback?state=${f.state()}&accountId=attacker`, { headers: { cookie } });
   assert.equal(completed.status, 303);
   assert.equal((await request('/apps/not-a-provider/connect', { csrf }, cookie)).status, 404);
@@ -114,6 +127,28 @@ test('Slack connection commands work without AI and generate user-specific priva
   assert.match(reply, /https:\/\/nudge.example\/apps#token=[a-f0-9]{64}/);
   assert.match(reply, /Do not share/);
   assert.match(await replyToUser(f.store, f.other, 'connect github'), /not configured/);
+});
+
+test('every personal app uses an executable OAuth handoff with a clickable fallback, not an external form redirect', async (t) => {
+  const f = fixture(); t.after(() => f.store.close());
+  const cookie = `nudge_apps=${f.login(f.user.id)}`;
+  const app = createApp(undefined, undefined, f.connections);
+  const page = await app.request('https://nudge.example/apps', { headers: { cookie } });
+  const csrf = (await page.text()).match(/name="csrf" value="([a-f0-9]+)"/)![1];
+  for (const [slug, name] of [['gmail', 'Gmail'], ['googlecalendar', 'Google Calendar'], ['github', 'GitHub']]) {
+    const response = await app.request(`https://nudge.example/apps/${slug}/connect`, {
+      method: 'POST', headers: { cookie, origin: 'https://nudge.example', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ csrf }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('location'), null);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+    const html = await response.text();
+    assert.ok(html.includes(`Continue to ${name} authorization`));
+    assert.match(html, /window.location.replace/);
+    assert.match(html, /href="https:\/\/connect.composio.dev\/approve"/);
+    assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM app_oauth WHERE app = ?').get(slug)!.n, 1);
+  }
 });
 
 test('disconnect during provider verification cancels an in-flight callback', async (t) => {

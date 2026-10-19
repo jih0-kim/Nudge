@@ -2,9 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { AppConnections, personalApps, type PersonalApp } from '../services/app-connections.js';
+import { AppConnections, appNames, personalApps, type PersonalApp } from '../services/app-connections.js';
 import { digest } from '../services/setup-auth.js';
 import { appsPage } from './apps-page.js';
+import { authorizationPage } from './setup-page.js';
 
 export function appsRoutes(connections: AppConnections) {
   const routes = new Hono();
@@ -69,7 +70,15 @@ export function appsRoutes(connections: AppConnections) {
     const action = c.req.param('action');
     if (!personalApps.includes(app) || !['connect', 'disconnect'].includes(action)) return c.text('Not found', 404);
     const session = connections.session(getCookie(c, 'nudge_apps'))!;
-    if (action === 'connect') return c.redirect(await connections.connect(session, app, c.req.url), 303);
+    if (action === 'connect') {
+      const redirectUrl = await connections.connect(session, app, c.req.url);
+      // Finish the form request before navigating externally. A 303 chain is
+      // still constrained by the apps page's form-action 'self' policy.
+      const nonce = randomBytes(18).toString('base64');
+      c.header('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`);
+      c.header('Referrer-Policy', 'no-referrer');
+      return c.html(authorizationPage(nonce, redirectUrl, { name: appNames[app], returnPath: '/apps' }));
+    }
     await connections.disconnect(session, app);
     return c.redirect('/apps', 303);
   });

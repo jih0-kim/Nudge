@@ -3,6 +3,15 @@ import { splitPetImage } from '../core/status.js';
 
 type SlackResult = Record<string, unknown>;
 
+function slackText(text: string) {
+  const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return text.split(/(https?:\/\/[^\s<>|`]+)/g).map((part, index) => {
+    if (index % 2 === 0) return escape(part).replace(/\*\*([^*\n]+)\*\*/g, '*$1*').replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
+    const url = part.replace(/[.,!?;:]+$/, '');
+    return URL.canParse(url) ? `<${escape(url)}>${escape(part.slice(url.length))}` : escape(part);
+  }).join('');
+}
+
 /** Only application-authored messages may reach the setup page. */
 export class SlackConnectionError extends Error {}
 
@@ -70,8 +79,7 @@ export class DirectSlackSender implements MessageSender {
 
   async send(target: MessageTarget, reply: string, _deliveryId: number, messageId?: string) {
     const { text, imageUrl } = splitPetImage(reply);
-    const escaped = text.slice(0, 12_000).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/\*\*([^*\n]+)\*\*/g, '*$1*').replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
+    const escaped = slackText(text.slice(0, 12_000));
     await this.call(await this.recipient(target), messageId ? 'chat.update' : 'chat.postMessage', {
       channel: target.channelId, text: escaped || ' ', parse: 'none', link_names: false,
       // Clear old blocks on updates; preserve pet images using Slack Block Kit.

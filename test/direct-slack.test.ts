@@ -103,6 +103,27 @@ test('direct sender verifies one bot identity and posts/edits without Composio o
   });
 });
 
+test('direct sender explicitly links connection URLs on posts and updates without enabling mentions or previews', async () => {
+  const messages: Record<string, unknown>[] = [];
+  const sender = new DirectSlackSender(async () => 'xoxb-test', async (url, init) => {
+    if (!String(url).endsWith('auth.test')) messages.push(JSON.parse(String(init?.body)));
+    return Response.json({ ok: true, team_id: 'T1', bot_id: 'B1' });
+  });
+  const url = 'https://nudge.example/apps#token=abc123';
+  const reply = `Manage your connections here:\n${url}\nDo not share it. <@U1> <!channel>`;
+  for (const messageId of [undefined, '1000.001']) {
+    await sender.send({ workspaceId: 'T1', channelId: 'D1' }, reply, 1, messageId);
+  }
+  for (const message of messages) {
+    assert.equal(message.text, `Manage your connections here:\n<${url}>\nDo not share it. &lt;@U1&gt; &lt;!channel&gt;`);
+    assert.equal(message.parse, 'none');
+    assert.equal(message.link_names, false);
+  }
+  assert.equal(messages[0].unfurl_links, false);
+  await sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'See https://example.com/?a=1&b=2. <script>', 2);
+  assert.equal(messages[2].text, 'See <https://example.com/?a=1&amp;b=2>. &lt;script&gt;');
+});
+
 test('different people get progress immediately while one coach call is blocked, with per-person ordering', async (t) => {
   const store = new Store(':memory:'); t.after(() => store.close());
   const user1 = store.user('T1', 'U1', 'D1'); const user2 = store.user('T1', 'U2', 'D2');

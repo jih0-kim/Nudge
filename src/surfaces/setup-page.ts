@@ -13,14 +13,16 @@ interface SetupPage {
 }
 
 /** Start a new navigation so CSP form-action does not block provider redirects. */
-export function authorizationPage(nonce: string, redirectUrl: string) {
+export function authorizationPage(nonce: string, redirectUrl: string, destination = { name: 'Slack', returnPath: '/setup' }) {
   const url = escapeHtml(redirectUrl);
+  const name = escapeHtml(destination.name);
+  const returnPath = escapeHtml(destination.returnPath);
   const scriptUrl = JSON.stringify(redirectUrl).replace(/</g, '\\u003c');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Continue to Slack · Nudge</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Continue to ${name} · Nudge</title>
 <style nonce="${nonce}">${setupStyles}</style></head><body><main>
 <div class="brand"><span class="mark" aria-hidden="true">🌱</span> nudge</div>
-<header><div class="eyebrow">Your personal habit coach</div><h1>One small step.<br>You’re almost there.</h1><p class="intro">We’re opening Composio so you can approve your Nudge Slack connection.</p></header>
-<section class="card" aria-labelledby="continue-heading"><h2 id="continue-heading">Continue to Slack</h2><p role="status">Opening your secure connection…</p><p><a class="button" href="${url}" rel="noreferrer">Continue to Slack authorization →</a></p><p class="hint">If nothing opens automatically, use the link above. After approval, you’ll return to Nudge.</p><a class="button secondary" href="/setup">Back to setup</a></section>
+<header><div class="eyebrow">Your personal habit coach</div><h1>One small step.<br>You’re almost there.</h1><p class="intro">We’re opening Composio so you can approve your Nudge ${name} connection.</p></header>
+<section class="card" aria-labelledby="continue-heading"><h2 id="continue-heading">Continue to ${name}</h2><p role="status">Opening your secure connection…</p><p><a class="button" href="${url}" rel="noreferrer">Continue to ${name} authorization →</a></p><p class="hint">If nothing opens automatically, use the link above. After approval, you’ll return to Nudge.</p><a class="button secondary" href="${returnPath}">Back to Nudge</a></section>
 <div class="footer">Memory stored in SQLite · Connections handled by Composio</div></main>
 <script nonce="${nonce}">window.location.replace(${scriptUrl});</script></body></html>`;
 }
