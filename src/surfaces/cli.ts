@@ -6,6 +6,7 @@ import { readEvents } from "../core/events.js";
 import { log } from "../core/log.js";
 import { computeState, thresholdsFor } from "../core/rules.js";
 import { DEFAULT_CONFIG, DEFAULT_EVENTS, run as runLoop } from "../core/run.js";
+import { currentStatus } from "../core/status.js";
 import type { Event, PetState } from "../core/types.js";
 import { renderPet } from "../pet/render.js";
 
@@ -22,11 +23,7 @@ function describe(state: PetState): string {
 }
 
 function status() {
-  const cfg = loadConfig(CONFIG);
-  const state = computeState(readEvents(EVENTS), cfg);
-  log("Keeper", `${cfg.pet.name}: ${describe(state)}`);
-  log("Keeper", `next durations: ${JSON.stringify(state.nextDurationMin)}`);
-  log("Keeper", `by platform: ${JSON.stringify(state.byClient)}`);
+  console.log(currentStatus(CONFIG, EVENTS).text.replace(/\*/g, ""));
 }
 
 function render() {

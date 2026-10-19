@@ -19,8 +19,8 @@ import { isOpen, questStatuses } from "./quests.js";
 import { inRange, parseRange, wallTime } from "./time.js";
 import type { Event, HabitConfig } from "./types.js";
 
-export const DEFAULT_CONFIG = process.env.NUDGLING_CONFIG ?? "examples/nudgling.yaml";
-export const DEFAULT_EVENTS = process.env.NUDGLING_EVENTS ?? "state/events.jsonl";
+import { DEFAULT_CONFIG, DEFAULT_EVENTS } from "./status.js";
+export { DEFAULT_CONFIG, DEFAULT_EVENTS };
 
 export type RunOptions = { configPath?: string; eventsPath?: string; dry?: boolean; now?: Date };
 
@@ -61,7 +61,7 @@ export async function run({
     const slot = pickSlot(habit.id, ctx.events, config, now);
     log("Scheduler", `${habit.id}: ${slot.at.toISOString()}${slot.reason ? ` (${slot.reason})` : ""}`);
     const questId = `q-${now.getTime().toString(36)}`;
-    const sent = await sendQuest(ctx, habit, formatQuest(ctx, state.stage, options, slot, duration));
+    const sent = await sendQuest(ctx, habit, formatQuest(ctx, state, options, slot, duration));
     if (sent) ctx.runtime.quest_channels = { ...ctx.runtime.quest_channels, [questId]: sent.channel };
     record([
       {

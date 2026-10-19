@@ -1,6 +1,7 @@
 import type { IncomingTriggerPayload } from '@composio/core';
 import type { MessageSender, MessageTarget } from '../core/messaging.js';
 import { getComposioClient } from './composio.js';
+import { splitPetImage } from '../core/status.js';
 
 export const SLACK_DM_TRIGGER = 'SLACKBOT_DIRECT_MESSAGE_RECEIVED';
 export const SLACK_SEND_TOOL = 'SLACKBOT_SEND_MESSAGE';
@@ -116,7 +117,8 @@ export class ComposioSlackSender implements MessageSender {
     } catch (error) { this.cached = undefined; throw error; }
   }
 
-  async send(target: MessageTarget, text: string, _deliveryId: number, messageId?: string) {
+  async send(target: MessageTarget, reply: string, _deliveryId: number, messageId?: string) {
+    const { imageUrl, text } = splitPetImage(reply);
     try {
       const session = await this.recipient(target);
       // Use native Markdown rather than provider-converted plain_text blocks,
@@ -125,7 +127,15 @@ export class ComposioSlackSender implements MessageSender {
         .replace(/\n[ \t]*\n/g, '\n\u00a0\n');
       const content = {
         channel: target.channelId,
-        markdown_text: markdown || ' ',
+        ...(imageUrl ? {
+          blocks: [
+            { type: 'image', image_url: imageUrl, alt_text: 'Nudgling' },
+            ...(text.slice(0, 30_000).match(/[\s\S]{1,3000}/g) || [' ']).map((chunk) => ({
+              type: 'section', text: { type: 'plain_text', text: chunk, emoji: false },
+            })),
+          ],
+          fallback_text: text.slice(0, 200),
+        } : { markdown_text: markdown || ' ' }),
       };
       toolData(await session.execute(messageId ? SLACK_UPDATE_TOOL : SLACK_SEND_TOOL, messageId
         ? { ...content, ts: messageId }

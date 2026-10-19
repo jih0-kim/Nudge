@@ -1,3 +1,4 @@
+import { withPetImage } from '../src/core/status.js';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { test } from 'node:test';
@@ -198,4 +199,42 @@ test('failed tool results throw even when no error string is provided, and sessi
   await assert.rejects(sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'Hello', 1), /execution failed/);
   await assert.rejects(sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'Hello', 1));
   assert.equal(created, 2);
+});
+
+test('sender puts our pet GIF above the text and ignores other image markers', async () => {
+  const sent: unknown[] = [];
+  const session: MessagingSession = { execute: async (slug, args) => {
+    if (slug === 'SLACKBOT_FETCH_TEAM_INFO') return completed({ team: { id: 'T1' } });
+    sent.push(args);
+    return completed({ ok: true });
+  } };
+  const sender = new ComposioSlackSender(async () => session);
+  const gif = 'https://raw.githubusercontent.com/jih0-kim/Nudge/main/assets/gif/stage1.gif';
+  await sender.send({ workspaceId: 'T1', channelId: 'D1' }, withPetImage(gif, 'Cracked'), 1);
+  await sender.send({ workspaceId: 'T1', channelId: 'D1' }, withPetImage('https://evil.example/x.gif', 'Hi'), 2);
+  assert.deepEqual((sent[0] as Record<string, unknown>).blocks, [
+    { type: 'image', image_url: gif, alt_text: 'Nudgling' },
+    { type: 'section', text: { type: 'plain_text', text: 'Cracked', emoji: false } },
+  ]);
+  assert.equal((sent[1] as Record<string, unknown>).blocks, undefined);
+  assert.equal((sent[1] as Record<string, unknown>).markdown_text, withPetImage('https://evil.example/x.gif', 'Hi'));
+});
+
+test('pet image replies update the thinking message in place', async () => {
+  const calls: { slug: string; args: Record<string, unknown> | undefined }[] = [];
+  const sender = new ComposioSlackSender(async () => ({ execute: async (slug, args) => {
+    calls.push({ slug, args });
+    if (slug === 'SLACKBOT_FETCH_TEAM_INFO') return completed({ team: { id: 'T1' } });
+    return completed({ ok: true, ts: '123.456' });
+  } }));
+  const target = { workspaceId: 'T1', channelId: 'D1' };
+  const messageId = await sender.start(target, 1);
+  const gif = 'https://raw.githubusercontent.com/jih0-kim/Nudge/main/assets/gif/stage1.gif';
+  await sender.send(target, withPetImage(gif, 'Cracked'), 1, messageId);
+  assert.equal(calls[2].slug, SLACK_UPDATE_TOOL);
+  assert.equal(calls[2].args?.ts, messageId);
+  assert.deepEqual(calls[2].args?.blocks, [
+    { type: 'image', image_url: gif, alt_text: 'Nudgling' },
+    { type: 'section', text: { type: 'plain_text', text: 'Cracked', emoji: false } },
+  ]);
 });

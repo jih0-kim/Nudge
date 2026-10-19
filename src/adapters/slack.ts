@@ -24,13 +24,22 @@ export async function whoAmI(): Promise<{ userId: string; team: string }> {
   return { userId: data.user_id, team: data.team };
 }
 
-/** `text` uses Slack mrkdwn (*bold*); converted for the bot toolkit, which takes standard markdown. */
-export async function postMessage(via: SlackVia, channel: string, text: string, threadTs?: string) {
-  const thread = threadTs ? { thread_ts: threadTs } : {};
+/**
+ * `text` uses Slack mrkdwn (*bold*); converted for the bot toolkit, which takes standard markdown.
+ * With `imageUrl` (a public PNG/GIF), the image goes above the text as Block Kit blocks.
+ */
+export async function postMessage(via: SlackVia, channel: string, text: string, threadTs?: string, imageUrl?: string) {
+  const common = { channel, unfurl_links: false, unfurl_media: false, ...(threadTs ? { thread_ts: threadTs } : {}) };
+  const blocks = imageUrl
+    ? [
+        { type: 'image', image_url: imageUrl, alt_text: 'Nudgling' },
+        { type: 'section', text: { type: 'mrkdwn', text } },
+      ]
+    : undefined;
   const data =
     via === 'slackbot'
-      ? await executeTool('SLACKBOT_SEND_MESSAGE', { channel, markdown_text: toMarkdown(text), unfurl_links: false, unfurl_media: false, ...thread })
-      : await executeTool('SLACK_CHAT_POST_MESSAGE', { channel, text, unfurl_links: false, unfurl_media: false, ...thread });
+      ? await executeTool('SLACKBOT_SEND_MESSAGE', blocks ? { ...common, blocks, fallback_text: text } : { ...common, markdown_text: toMarkdown(text) })
+      : await executeTool('SLACK_CHAT_POST_MESSAGE', { ...common, text, ...(blocks ? { blocks } : {}) });
   return { channel: (data.channel ?? channel) as string, ts: (data.ts ?? data.message?.ts) as string };
 }
 
