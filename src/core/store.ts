@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type User = { id: number; team_id: string; slack_id: string; channel_id: string; timezone: string; memory: string };
-export type Job = { id: number; user_id: number; text: string; reply: string | null; attempts: number; kind: string };
+export type Job = { id: number; user_id: number; text: string; reply: string | null; attempts: number; kind: string; message_id: string | null };
 
 export class Store {
   readonly db: DatabaseSync;
@@ -44,6 +44,8 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, available_at);
     `);
+    const columns = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[];
+    if (!columns.some((column) => column.name === 'message_id')) this.db.exec('ALTER TABLE jobs ADD COLUMN message_id TEXT');
   }
 
   user(team: string, slack: string, channel: string): User {
@@ -137,6 +139,10 @@ export class Store {
 
   saveReply(id: number, reply: string) {
     this.db.prepare('UPDATE jobs SET reply = ? WHERE id = ?').run(reply, id);
+  }
+
+  saveMessageId(id: number, messageId: string) {
+    this.db.prepare('UPDATE jobs SET message_id = ? WHERE id = ?').run(messageId, id);
   }
 
   finish(job: Job) {

@@ -5,7 +5,7 @@ import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
 import { createApp } from '../src/app.js';
 import { Store } from '../src/core/store.js';
-import { ComposioSlackSender, createComposioVerifier, createSlackSession, SLACK_DM_TRIGGER, SLACK_SEND_TOOL, type MessagingSession } from '../src/adapters/composio-slack.js';
+import { ComposioSlackSender, createComposioVerifier, createSlackSession, SLACK_DM_TRIGGER, SLACK_SEND_TOOL, SLACK_UPDATE_TOOL, type MessagingSession } from '../src/adapters/composio-slack.js';
 
 function client() {
   return new Composio({ apiKey: 'test-key', provider: new VercelProvider(), allowTracking: false, disableVersionCheck: true });
@@ -63,6 +63,28 @@ test('webhook ingestion allows only configured account DMs and deduplicates mess
   assert.equal((await app.request('/webhooks/composio', { method: 'POST', body: 'a'.repeat(70_000) })).status, 413);
 });
 
+test('signed account aliases are resolved by Composio without admitting other accounts', async (t) => {
+  const composio = client();
+  let lookups = 0;
+  t.mock.method(composio.connectedAccounts, 'get', async (id) => {
+    lookups++;
+    return { id: id === 'account-uuid' ? 'ca_1' : 'ca_other' };
+  });
+  const verify = createComposioVerifier(composio, 'secret', 'ca_1');
+  const payload = envelope();
+  payload.metadata.connected_account_id = 'account-uuid';
+  const body = JSON.stringify(payload);
+  assert.equal((await verify(body, signedHeaders(body))).metadata.connectedAccount.id, 'ca_1');
+  assert.equal((await verify(body, signedHeaders(body))).metadata.connectedAccount.id, 'ca_1');
+  assert.equal(lookups, 1);
+  payload.metadata.connected_account_id = 'ca_wrong';
+  const wrong = JSON.stringify(payload);
+  assert.equal((await verify(wrong, signedHeaders(wrong))).metadata.connectedAccount.id, 'ca_wrong');
+  const before = lookups;
+  await assert.rejects(verify(wrong, new Headers()));
+  assert.equal(lookups, before); // No account resolution before signature verification.
+});
+
 const completed = (data: Record<string, unknown>) => ({ data, error: null, logId: 'log_1', resultType: 'completed' as const });
 
 test('sessions are restricted to the selected Slackbot account and fixed transport tools', async (t) => {
@@ -71,7 +93,7 @@ test('sessions are restricted to the selected Slackbot account and fixed transpo
     assert.equal(userId, 'owner');
     assert.deepEqual(options.connectedAccounts, { slackbot: 'ca_1' });
     assert.deepEqual(options.toolkits, ['slackbot']);
-    assert.deepEqual(options.tools, { slackbot: [SLACK_SEND_TOOL, 'SLACKBOT_FETCH_TEAM_INFO'] });
+    assert.deepEqual(options.tools, { slackbot: [SLACK_SEND_TOOL, SLACK_UPDATE_TOOL, 'SLACKBOT_FETCH_TEAM_INFO'] });
     assert.equal(options.manageConnections, false);
     assert.equal(options.sessionPreset, 'direct_tools');
     return {};
@@ -79,7 +101,7 @@ test('sessions are restricted to the selected Slackbot account and fixed transpo
   await createSlackSession(composio, { userId: 'owner', connectedAccountId: 'ca_1' });
 });
 
-test('sender checks workspace, reuses sessions and uses Composio plain-text message blocks', async () => {
+test('sender checks workspace, reuses sessions and uses native Markdown', async () => {
   let created = 0;
   const calls: string[] = [];
   const session: MessagingSession = { execute: async (slug, args) => {
@@ -87,7 +109,8 @@ test('sender checks workspace, reuses sessions and uses Composio plain-text mess
     if (slug === 'SLACKBOT_FETCH_TEAM_INFO') return completed({ team: { id: 'T1' } });
     assert.equal(slug, SLACK_SEND_TOOL);
     assert.equal(args?.channel, 'D1');
-    assert.deepEqual(args?.blocks, [{ type: 'section', text: { type: 'plain_text', text: 'Hello', emoji: false } }]);
+    assert.equal(args?.markdown_text, 'Hello');
+    assert.equal(args?.blocks, undefined);
     assert.equal(args?.unfurl_links, false);
     return completed({ ok: true });
   } };
@@ -98,6 +121,26 @@ test('sender checks workspace, reuses sessions and uses Composio plain-text mess
   assert.deepEqual(calls, ['SLACKBOT_FETCH_TEAM_INFO', SLACK_SEND_TOOL, SLACK_SEND_TOOL]);
   await assert.rejects(sender.send({ workspaceId: 'T2', channelId: 'D1' }, 'Hello', 3), /workspace/);
   assert.equal(calls.length, 3); // No message sent to the wrong workspace.
+});
+
+test('thinking message is updated in place with paragraph spacing and escaped Slack entities', async () => {
+  const calls: { slug: string; args: unknown }[] = [];
+  const sender = new ComposioSlackSender(async () => ({ execute: async (slug, args) => {
+    calls.push({ slug, args });
+    if (slug === 'SLACKBOT_FETCH_TEAM_INFO') return completed({ team: { id: 'T1' } });
+    return completed({ data: { ok: true, ts: '123.456' } });
+  } }));
+  const target = { workspaceId: 'T1', channelId: 'D1' };
+  const messageId = await sender.start(target, 1);
+  assert.equal(messageId, '123.456');
+  await sender.send(target, '**Hi**\n\n- Read\n- Walk\n<!channel> <@U1> & <https://example.com|link>', 1, messageId);
+  assert.deepEqual(calls.map((c) => c.slug), ['SLACKBOT_FETCH_TEAM_INFO', SLACK_SEND_TOOL, SLACK_UPDATE_TOOL]);
+  assert.equal((calls[1].args as Record<string, unknown>).markdown_text, '_Thinking…_');
+  const updated = calls[2].args as Record<string, unknown>;
+  assert.equal(updated.ts, messageId);
+  assert.equal(updated.channel, 'D1');
+  assert.equal(updated.markdown_text, '**Hi**\n\u00a0\n- Read\n- Walk\n&lt;!channel&gt; &lt;@U1&gt; &amp; &lt;https://example.com|link&gt;');
+  await assert.rejects(sender.start({ workspaceId: 'T2', channelId: 'D1' }, 2), /workspace/);
 });
 
 test('failed tool results throw even when no error string is provided, and sessions refresh', async () => {

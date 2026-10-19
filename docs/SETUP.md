@@ -3,7 +3,7 @@
 ## For the installer
 
 1. Open the **private installer link** printed when Nudge starts. Treat this link like an admin password; it unlocks setup, not user memory.
-2. Open it at the app's **public HTTPS address** (for example, your deployment or development tunnel), keeping `/setup#token=…` from the private link. The address field fills itself in when opened over HTTPS.
+2. Open it at the app's **public HTTPS address** (for example, your deployment or development tunnel), keeping `/setup?token=…` from the private link. The server signs you in and immediately redirects to `/setup` without the key. The address field fills itself in when opened over HTTPS. Older fragment-based links still work with JavaScript enabled.
 3. Review the message-delivery permission checkbox and click **Connect Slack**.
 4. Choose your workspace and approve Composio's Slackbot connection. A workspace admin may need to approve installation.
 5. Return to Nudge. It saves the exact authorized connection, configures the webhook, enables the DM trigger, and starts the worker automatically—no copied IDs, secrets, or restart.
@@ -28,7 +28,7 @@ Get a **project API key** from <https://dashboard.composio.dev/~/project/setting
 
 Start the app with `npm run dev`, or `npm run build` followed by `npm start`. The startup message prints a private installer link. `APP_BASE_URL` optionally sets the public address used in that message and the form. For a local server, expose port 3000 through an HTTPS tunnel; open the installer link using the tunnel hostname, not `localhost`, so the OAuth callback returns to the same browser cookie.
 
-An optional `NUDGE_SETUP_TOKEN` can supply the installer key; otherwise Nudge generates one and saves it in SQLite. Protect server logs, the private link, and the database. Installer sessions use HTTP-only cookies, expire after eight hours, and are cleared by server restarts. Login attempts are rate-limited. Setup mutations require same-origin JSON requests; OAuth callbacks are state-checked and bound to the initiating browser.
+An optional `NUDGE_SETUP_TOKEN` can supply the installer key; otherwise Nudge generates one and saves it in SQLite. Protect server logs, the private link, and the database. Installer sessions use HTTP-only cookies, expire after eight hours, and are cleared by server restarts. Reopen the private link after a restart. Login attempts are rate-limited. Setup pages, progress, and errors are rendered on the server; buttons use ordinary forms and redirects, with same-origin checks and session-bound CSRF tokens. OAuth callbacks are state-checked and bound to the initiating browser. Current installer links work without JavaScript. They contain an admin credential: do not share them or log query strings at a reverse proxy. Responses are non-cacheable, do not send referrers, and redirect away from the credential immediately; browser history or infrastructure may still retain the original private link. Personal app connections are separate and are not part of Slack installation.
 
 ### What is saved
 
@@ -43,6 +43,19 @@ Nudge creates its own Composio-managed auth configuration with explicit permissi
 Keep `data/nudge.sqlite` on private, persistent disk. Back up with SQLite's online backup facilities or stop the server before copying it; copying only the main file during WAL writes is not a reliable backup. Run one server process per database.
 
 ## Try it in Slack
+
+### Use your own Slack app (name, icon and enabled DMs)
+
+The shared Composio app's branding and Messages settings belong to Composio. For a Nudge-branded coach, create your own Slack app; Slack CLI and another Bolt server are not required.
+
+1. In Slack app settings, set the name/icon under **Basic Information → Display Information**. Under **App Home**, set the bot name and enable the Messages tab and its option allowing users to send messages.
+2. Configure the bot/user scopes listed above and the bot event `message.im`.
+3. In your dedicated Composio project's **Auth Configs**, create a **Slackbot** OAuth2 configuration using **your own credentials**, not Composio-managed credentials. Enter the Slack app's client ID, client secret, and verification token directly there. For custom Slackbot triggers, Composio requires the verification token in the auth config before a fresh connection is authorized. Never paste these credentials into chat or commit them.
+4. Add the exact OAuth redirect URL shown by Composio to Slack's **OAuth & Permissions → Redirect URLs**. Keep this separate from Nudge's `/setup/callback`: Slack returns to Composio first, then Composio returns to Nudge. Follow Composio's custom Slackbot trigger instructions for Slack's Event Subscriptions request URL; it is **not** Nudge's signed `/webhooks/composio` endpoint.
+5. Set `COMPOSIO_SLACK_AUTH_CONFIG_ID=ac_…` in the server's private `.env` and restart the server to load this operator setting. Nudge will explicitly use that auth config and will not substitute the shared app if it fails.
+6. Open the private setup page, confirm consent, click **Reconnect Slack**, and approve the custom app. This replaces the installed connection without deleting user memory or reminders. After setup succeeds, DM **Nudge**, not **Composio**.
+
+The auth config ID is an identifier, not a client secret. Regular Slack users still only DM the bot; this configuration is a one-time operator task.
 
 ```text
 hi

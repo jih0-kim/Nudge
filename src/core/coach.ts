@@ -1,8 +1,15 @@
 import { generateText, isStepCount, jsonSchema, tool } from 'ai';
 import { getLanguageModel } from '../adapters/llm.js';
 import type { Store, User } from './store.js';
+import type { AppConnections } from '../services/app-connections.js';
 
-const help = `I'm your habit coach. No signup needed—your Slack identity keeps your memory separate.
+const greeting = `Hi! 🌱 I’m Nudge, your personal habit coach.
+
+What’s one small habit you’d like to build?
+
+Tell me your timezone too, so reminders arrive at the right time. Type **help** whenever you want examples.`;
+
+const help = `## A little help from Nudge
 
 Tell me your timezone and one habit you'd like to build. You can chat naturally, or use:
 • remember I prefer short reading sessions
@@ -14,6 +21,7 @@ Tell me your timezone and one habit you'd like to build. You can chat naturally,
 • cancel 12 — cancel a pending reminder
 • done Read for five minutes
 • progress — recent activity
+• connections — open your private connected-apps page
 
 Reminders are one-time in this version. Use an explicit date and time; quiet hours and recurring schedules aren't implemented yet. Memory and recent chat context are stored in the app's SQLite database; relevant context is sent to OpenAI when you chat. "forget memory" does not remove activity or reminders.`;
 
@@ -53,9 +61,15 @@ export function coachTools(store: Store, userId: number) {
   };
 }
 
-export async function replyToUser(store: Store, user: User, input: string): Promise<string> {
+export async function replyToUser(store: Store, user: User, input: string, connections?: AppConnections): Promise<string> {
   const text = input.trim();
-  if (/^(help|hi|hello|start)$/i.test(text)) return help;
+  if (/^(connections|connect(?:\s+(gmail|calendar|google calendar|github))?)$/i.test(text)) {
+    if (!connections) return 'Personal app connections are not configured by the operator yet.';
+    try { return `Manage your Gmail, Google Calendar, and GitHub connections here:\n${connections.link(user.id)}\nThis private link expires in 15 minutes and works once. Do not share it.`; }
+    catch { return 'The operator needs to configure APP_BASE_URL before personal app connections are available.'; }
+  }
+  if (/^(hi|hello|start)[!.]?$/i.test(text)) return greeting;
+  if (/^help$/i.test(text)) return help;
   if (/^memory$/i.test(text)) return store.getUser(user.id).memory;
   if (/^forget memory$/i.test(text)) {
     store.forget(user.id);
@@ -95,6 +109,7 @@ export async function replyToUser(store: Store, user: User, input: string): Prom
   const { text: response } = await generateText({
     model: getLanguageModel(),
     system: `You are Nudgling, a concise, encouraging personal habit coach. Never shame the user.
+Keep replies short, with short paragraphs and at most one question. Use standard Markdown for headings, **bold**, and lists; do not use tables or dump command documentation unless asked. Put each list item on its own line.
 Current UTC time: ${new Date().toISOString()}. User timezone: ${user.timezone} (UTC may be a default; ask if unknown).
 Use tools to actually persist changes. Never claim you saved, scheduled, cancelled, or logged something unless its tool succeeded.
 Only one-time reminders are supported; do not pretend recurring reminders, quiet hours, or calendar integration exist.

@@ -77,6 +77,14 @@ DM the bot `help`, `remember <preference>`, `memory`, `timezone <IANA zone>`, `r
 
 ## AI and integrations
 
+### Personal connected apps
+
+Open **Connected apps** from the setup page, or DM `connections` to Nudge to receive a private, single-use link to `/apps`. Gmail, Google Calendar, and GitHub are connected separately for each Slack user. The link expires after 15 minutes; browser sessions last eight hours. The workspace installer key does not unlock personal connections.
+
+Operators must set `APP_BASE_URL` to the public HTTPS origin and configure `COMPOSIO_GMAIL_AUTH_CONFIG_ID`, `COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID`, and/or `COMPOSIO_GITHUB_AUTH_CONFIG_ID`. Create each OAuth auth config in the same Composio project, review its scopes, and enable the corresponding provider. Apps without an auth config remain disabled. Check Google verification and GitHub organization/SSO requirements before public rollout; prefer read-only and repository-scoped permissions where available.
+
+This release connects accounts, checks status, and removes connections from Nudge and Composio. It does **not** expose email, calendar, or repository tools to the coach. Users can additionally revoke provider grants in Google/GitHub settings. No raw OAuth credentials are stored in Nudge. Keep SQLite private: it contains hashed browser credentials and connected-account references.
+
 Add the values from `.env.example` to your local `.env`. Integrations initialize only when called, so the server still starts without API keys. Never commit your `.env`.
 
 | Integration | Required environment variables |
@@ -98,7 +106,7 @@ npm run integrations -- connect googlecalendar
 npm run integrations -- tools
 ```
 
-The integration smoke commands are for development only; Slack onboarding lives entirely in the browser. The general `tools` command lists AI SDK-compatible session tool names without executing them. Runtime Slackbot sessions allow only message sending and workspace lookup on the installed connected account.
+The integration smoke commands are for development only; Slack onboarding lives entirely in the browser. The general `tools` command lists AI SDK-compatible session tool names without executing them. Runtime Slackbot sessions allow only message sending, message updates, and workspace lookup on the installed connected account. Replies use native Markdown, and an initial “Thinking…” message is updated in place when the reply is ready. This is a progress message, not Slack's native typing indicator. Its message timestamp is persisted with the job so delivery retries update the same message.
 
 Adapters live in `src/adapters/{llm,composio,parallel}.ts`. `getLanguageModel()` can be passed to AI SDK calls, `searchWeb()` returns Parallel results with URLs and excerpts, and `createComposioSession()` provides `session.tools()` for future agent wiring. Save `session.sessionId` and reuse it with `getComposioClient().use(sessionId)` for multi-turn agents.
 

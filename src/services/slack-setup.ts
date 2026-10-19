@@ -3,6 +3,7 @@ import { Settings } from '../core/settings.js';
 import { digest } from './setup-auth.js';
 
 export interface SlackInstallation {
+  authConfigId?: string;
   userId: string;
   connectedAccountId: string;
   webhookSecret: string;
@@ -20,6 +21,7 @@ interface PendingConnection {
 }
 
 export interface SlackSetupProvider {
+  readonly authConfigId?: string;
   authorize(callbackUrl: string): Promise<{ accountId: string; redirectUrl: string }>;
   isActive(accountId: string): Promise<boolean>;
   configureWebhook(publicUrl: string, previous?: SlackInstallation): Promise<{ subscriptionId: string; secret: string }>;
@@ -57,14 +59,17 @@ export class SlackSetup {
     const installation = this.installation();
     const pending = this.settings.get<PendingConnection>('slack.pending');
     const error = this.settings.get<{ message: string; code?: string }>('slack.setup-error');
+    const appChanged = Boolean(installation && this.provider?.authConfigId
+      && installation.authConfigId !== this.provider.authConfigId);
     return {
       composioConfigured: Boolean(this.provider), aiConfigured: this.aiConfigured,
       connected: Boolean(installation?.connectedAccountId),
-      ready: Boolean(this.provider && installation?.triggerId && installation?.webhookSecret),
+      ready: Boolean(this.provider && installation?.triggerId && installation?.webhookSecret && !appChanged),
       pending: Boolean(pending && pending.expiresAt > Date.now()),
       publicUrl: installation?.publicUrl || this.defaultPublicUrl || '',
       busy: this.busy, error: error?.message || null,
-      reconnectRequired: error?.code === 'missing_permissions',
+      reconnectRequired: appChanged || error?.code === 'missing_permissions',
+      appChanged,
     };
   }
 
@@ -124,6 +129,7 @@ export class SlackSetup {
     const webhook = await provider.configureWebhook(publicUrl, this.installation());
     // Save partial progress so a failed trigger setup can be retried without losing the secret.
     const installation: SlackInstallation = {
+      authConfigId: provider.authConfigId,
       userId: this.userId, connectedAccountId: accountId, publicUrl,
       webhookSecret: webhook.secret, subscriptionId: webhook.subscriptionId, triggerId: '',
     };

@@ -23,7 +23,14 @@ export function composioRoutes(source: ComposioWebhookSource) {
     try { event = await dependencies.verify(body, c.req.raw.headers); }
     catch { return c.json({ error: 'Invalid Composio webhook' }, 401); }
     const result = ingestSlackEvent(dependencies.store, dependencies.connectedAccountId, event);
-    if (result === 'forbidden') return c.json({ error: 'Connected account not configured' }, 403);
+    if (result === 'forbidden') {
+      // IDs only, never message text, signing material, or the provider payload.
+      console.warn('Slack event rejected: account mismatch', JSON.stringify({
+        expected: dependencies.connectedAccountId, received: event.metadata.connectedAccount.id,
+        trigger: event.id,
+      }));
+      return c.json({ error: 'Connected account not configured' }, 403);
+    }
     // Persist before acknowledgement; AI and message delivery happen in the worker.
     return c.json({ ok: true });
   });

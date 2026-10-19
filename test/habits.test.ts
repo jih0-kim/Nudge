@@ -61,6 +61,53 @@ test('worker retries saved replies without running the coach again', async (t) =
   assert.deepEqual({ ...job }, { status: 'done', text: '', reply: null });
 });
 
+test('short greeting asks one habit question instead of dumping help', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1');
+  const greeting = await replyToUser(store, user, 'hi');
+  assert.ok(greeting.length < 350);
+  assert.match(greeting, /one small habit/);
+  assert.match(greeting, /\n\n/);
+  assert.doesNotMatch(greeting, /SQLite|cancel 12/);
+  assert.match(await replyToUser(store, user, 'help'), /reminders/);
+});
+
+test('worker persists thinking message and updates it on delivery retries without rerunning the coach', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1'); store.enqueue('E1', user.id, 'hi');
+  let starts = 0; let replies = 0; let sends = 0;
+  const tick = createWorker(store, {
+    start: async () => { starts++; return '123.456'; },
+    send: async (_target, text, _job, messageId) => {
+      assert.equal(messageId, '123.456'); assert.equal(text, 'Hello!');
+      if (++sends === 1) throw new Error('temporary failure');
+    },
+  }, async () => {
+    assert.equal(starts, 1);
+    assert.equal(store.db.prepare('SELECT message_id FROM jobs').get()!.message_id, '123.456');
+    replies++; return 'Hello!';
+  });
+  await tick();
+  store.db.prepare("UPDATE jobs SET available_at = 0 WHERE status = 'pending'").run();
+  await tick();
+  assert.equal(starts, 1); assert.equal(replies, 1); assert.equal(sends, 2);
+});
+
+test('thinking indicator failure does not stop replies and reminders have no thinking indicator', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1'); store.enqueue('E1', user.id, 'hi');
+  let starts = 0; let sends = 0;
+  const tick = createWorker(store, {
+    start: async () => { starts++; throw new Error('unsupported'); },
+    send: async () => { sends++; },
+  }, async () => 'Hello!');
+  await tick();
+  const past = Date.now() - 10_000;
+  store.schedule(user.id, 'Read', new Date(past + 1000).toISOString(), past);
+  await tick();
+  assert.equal(starts, 1); assert.equal(sends, 2);
+});
+
 test('due reminders and memory survive restart and are queued once', async () => {
   const directory = mkdtempSync('/tmp/opencode/nudge-test-');
   const path = join(directory, 'test.sqlite');

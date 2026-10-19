@@ -8,6 +8,8 @@ import { Settings } from './core/settings.js';
 import { SetupAuth } from './services/setup-auth.js';
 import { SlackSetup, type SlackInstallation } from './services/slack-setup.js';
 import { SlackRuntime } from './services/slack-runtime.js';
+import { AppConnections } from './services/app-connections.js';
+import { ComposioAppsProvider } from './adapters/composio-apps.js';
 
 const port = Number(process.env.PORT ?? 3000);
 
@@ -20,14 +22,20 @@ const settings = new Settings(store.db);
 const client = process.env.COMPOSIO_API_KEY?.trim() ? getComposioClient() : undefined;
 const saved = settings.get<SlackInstallation>('slack.installation');
 const userId = saved?.userId || process.env.COMPOSIO_USER_ID?.trim() || 'local-user';
-const runtime = client ? new SlackRuntime(store, client) : undefined;
+const connections = new AppConnections(store, client ? new ComposioAppsProvider(client, {
+  gmail: process.env.COMPOSIO_GMAIL_AUTH_CONFIG_ID?.trim(),
+  googlecalendar: process.env.COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID?.trim(),
+  github: process.env.COMPOSIO_GITHUB_AUTH_CONFIG_ID?.trim(),
+}) : undefined, process.env.APP_BASE_URL);
+const runtime = client ? new SlackRuntime(store, client, connections) : undefined;
 if (saved?.triggerId) runtime?.activate(saved);
 
 const setupToken = process.env.NUDGE_SETUP_TOKEN?.trim() || settings.get<string>('setup.access-token') || randomBytes(32).toString('hex');
 settings.set('setup.access-token', setupToken);
-const setup = new SlackSetup(settings, client ? new ComposioSetupProvider(client, userId, settings) : undefined, userId,
+const setup = new SlackSetup(settings, client ? new ComposioSetupProvider(client, userId, settings,
+  process.env.COMPOSIO_SLACK_AUTH_CONFIG_ID?.trim() || undefined) : undefined, userId,
   (installation) => runtime?.activate(installation), Boolean(process.env.OPENAI_API_KEY?.trim()), process.env.APP_BASE_URL);
-const app = createApp(() => runtime?.webhook, { auth: new SetupAuth(setupToken), setup });
+const app = createApp(() => runtime?.webhook, { auth: new SetupAuth(setupToken, settings), setup }, connections);
 let running: Promise<void> | undefined;
 const timer = setInterval(() => {
   if (!running) running = Promise.resolve(runtime?.tick()).catch(() => console.error('Background worker failed')).finally(() => { running = undefined; });
@@ -35,7 +43,7 @@ const timer = setInterval(() => {
 
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Nudgling is running at http://localhost:${info.port}`);
-  console.log(`Private installer link (treat this like a password): ${process.env.APP_BASE_URL || `http://localhost:${info.port}`}/setup#token=${setupToken}`);
+  console.log(`Private installer link (treat this like a password): ${process.env.APP_BASE_URL || `http://localhost:${info.port}`}/setup?token=${encodeURIComponent(setupToken)}`);
   console.log(runtime?.webhook ? 'Composio Slackbot worker enabled' : 'Open the private setup link to connect Slack.');
 });
 

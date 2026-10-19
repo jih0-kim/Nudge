@@ -4,6 +4,7 @@ import { getComposioClient } from './composio.js';
 
 export const SLACK_DM_TRIGGER = 'SLACKBOT_DIRECT_MESSAGE_RECEIVED';
 export const SLACK_SEND_TOOL = 'SLACKBOT_SEND_MESSAGE';
+export const SLACK_UPDATE_TOOL = 'SLACKBOT_UPDATES_A_MESSAGE';
 const SLACK_TEAM_TOOL = 'SLACKBOT_FETCH_TEAM_INFO';
 
 export interface SlackConnection {
@@ -20,14 +21,15 @@ export function createSlackSession(client: ComposioClient, config: Pick<SlackCon
   return client.create(config.userId, {
     sessionPreset: 'direct_tools',
     toolkits: ['slackbot'],
-    tools: { slackbot: [SLACK_SEND_TOOL, SLACK_TEAM_TOOL] },
+    tools: { slackbot: [SLACK_SEND_TOOL, SLACK_UPDATE_TOOL, SLACK_TEAM_TOOL] },
     connectedAccounts: { slackbot: config.connectedAccountId },
     manageConnections: false,
   }, { signal: AbortSignal.timeout(20_000) });
 }
 
 /** Verify with the SDK using the raw body; never accept unsigned trigger data. */
-export function createComposioVerifier(client: ComposioClient, secret: string) {
+export function createComposioVerifier(client: ComposioClient, secret: string, connectedAccountId?: string) {
+  const aliases = new Map<string, boolean>();
   return async (body: string, headers: Headers): Promise<IncomingTriggerPayload> => {
     const result = await client.triggers.verifyWebhook({
       payload: body,
@@ -37,7 +39,26 @@ export function createComposioVerifier(client: ComposioClient, secret: string) {
       secret,
       tolerance: 300,
     });
-    return result.payload;
+    const event = result.payload;
+    const account = event.metadata.connectedAccount;
+    if (connectedAccountId && event.triggerSlug === SLACK_DM_TRIGGER
+      && account.id !== connectedAccountId && account.uuid !== connectedAccountId) {
+      // Some signed payload versions identify an account by UUID rather than
+      // its ca_ ID. Resolve through Composio; never trust trigger/team IDs as
+      // substitutes for account ownership, and never accept a different app.
+      const incomingId = account.id || account.uuid;
+      let matches = aliases.get(incomingId);
+      if (matches === undefined && incomingId) {
+        try {
+          const resolved = await client.connectedAccounts.get(incomingId, { signal: AbortSignal.timeout(10_000) });
+          matches = resolved.id === connectedAccountId;
+        } catch { matches = false; }
+        if (aliases.size >= 100) aliases.delete(aliases.keys().next().value!);
+        aliases.set(incomingId, matches);
+      }
+      if (matches) account.id = connectedAccountId;
+    }
+    return event;
   };
 }
 
@@ -68,20 +89,39 @@ export class ComposioSlackSender implements MessageSender {
     return this.cached;
   }
 
-  async send(target: MessageTarget, text: string, _deliveryId: number) {
+  private async recipient(target: MessageTarget) {
+    const connection = await this.connection();
+    if (connection.workspaceId !== target.workspaceId) throw new Error('Slack workspace does not match the message recipient');
+    if (!target.channelId.startsWith('D')) throw new Error('Only direct messages are supported');
+    return connection.session;
+  }
+
+  async start(target: MessageTarget, _deliveryId: number) {
     try {
-      const { session, workspaceId } = await this.connection();
-      if (workspaceId !== target.workspaceId) throw new Error('Slack workspace does not match the message recipient');
-      if (!target.channelId.startsWith('D')) throw new Error('Only direct messages are supported');
-      const chunks = text.slice(0, 30_000).match(/[\s\S]{1,3000}/g) || [' '];
-      // Plain text blocks prevent Markdown memory from generating mentions/links.
-      toolData(await session.execute(SLACK_SEND_TOOL, {
-        channel: target.channelId,
-        blocks: chunks.map((chunk) => ({ type: 'section', text: { type: 'plain_text', text: chunk, emoji: false } })),
-        fallback_text: text.slice(0, 200),
-        unfurl_links: false,
-        unfurl_media: false,
+      const session = await this.recipient(target);
+      const data = toolData(await session.execute(SLACK_SEND_TOOL, {
+        channel: target.channelId, markdown_text: '_Thinking…_', unfurl_links: false, unfurl_media: false,
       }));
+      const ts = data.ts ?? (data.message as { ts?: unknown } | undefined)?.ts;
+      if (typeof ts !== 'string' || !ts) throw new Error('Slack did not return a progress message timestamp');
+      return ts;
+    } catch (error) { this.cached = undefined; throw error; }
+  }
+
+  async send(target: MessageTarget, text: string, _deliveryId: number, messageId?: string) {
+    try {
+      const session = await this.recipient(target);
+      // Use native Markdown rather than provider-converted plain_text blocks,
+      // which flatten paragraphs. Escape Slack entities to prevent injected pings.
+      const markdown = text.slice(0, 12_000).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\n[ \t]*\n/g, '\n\u00a0\n');
+      const content = {
+        channel: target.channelId,
+        markdown_text: markdown || ' ',
+      };
+      toolData(await session.execute(messageId ? SLACK_UPDATE_TOOL : SLACK_SEND_TOOL, messageId
+        ? { ...content, ts: messageId }
+        : { ...content, unfurl_links: false, unfurl_media: false }));
     } catch (error) {
       this.cached = undefined; // Refresh expired sessions on the next worker retry.
       throw error;

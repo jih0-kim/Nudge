@@ -9,9 +9,18 @@ export const SLACK_BOT_SCOPES = ['chat:write', 'team:read', 'im:history', 'im:re
 export const SLACK_USER_SCOPES = ['team:read', 'im:history'];
 
 export class ComposioSetupProvider implements SlackSetupProvider {
-  constructor(private client: ReturnType<typeof getComposioClient>, private userId: string, private settings: Settings) {}
+  get authConfigId() { return this.customAuthConfigId; }
+  constructor(
+    private client: ReturnType<typeof getComposioClient>,
+    private userId: string,
+    private settings: Settings,
+    private customAuthConfigId?: string,
+  ) {}
 
   private async authConfig() {
+    // A dedicated Slack app keeps its own branding, messaging settings and grants.
+    // Never fall back to the shared app when an operator selected a custom config.
+    if (this.customAuthConfigId) return this.customAuthConfigId;
     const scopes = SLACK_BOT_SCOPES.join(',');
     const userScopes = SLACK_USER_SCOPES.join(',');
     const saved = this.settings.get<{ id: string; scopes: string; userScopes: string }>('slack.auth-config');
@@ -36,7 +45,8 @@ export class ComposioSetupProvider implements SlackSetupProvider {
 
   async isActive(accountId: string) {
     const account = await this.client.connectedAccounts.get(accountId, { signal: AbortSignal.timeout(20_000) });
-    return account.status === 'ACTIVE' && !account.isDisabled && account.toolkit.slug.toLowerCase() === 'slackbot';
+    return account.status === 'ACTIVE' && !account.isDisabled && account.toolkit.slug.toLowerCase() === 'slackbot'
+      && (!this.customAuthConfigId || account.authConfig.id === this.customAuthConfigId);
   }
 
   async configureWebhook(publicUrl: string, previous?: SlackInstallation) {
@@ -56,7 +66,17 @@ export class ComposioSetupProvider implements SlackSetupProvider {
   }
 
   async enableTrigger(connectedAccountId: string) {
+    let ingressUrl: string | undefined;
     try {
+      if (this.customAuthConfigId) {
+        const config = await this.client.authConfigs.get(this.customAuthConfigId, { signal: AbortSignal.timeout(20_000) });
+        const clientId = config.credentials?.client_id;
+        if (typeof clientId !== 'string' || !clientId) throw new SetupError('The custom Slackbot auth configuration needs the Slack app client ID.');
+        // Custom apps need their own Slack -> Composio ingress, separate from
+        // the project subscription that forwards signed events to Nudge.
+        const endpoint = await this.client.webhooks.endpoints.create({ toolkitSlug: 'slackbot', clientId }, { signal: AbortSignal.timeout(20_000) });
+        ingressUrl = endpoint.webhookUrl;
+      }
       const trigger = await this.client.triggers.create(this.userId, SLACK_DM_TRIGGER, {
         connectedAccountId, triggerConfig: {},
       }, { signal: AbortSignal.timeout(20_000) });
@@ -64,6 +84,9 @@ export class ComposioSetupProvider implements SlackSetupProvider {
     } catch (error) {
       // Surface the actionable permission failure, never the raw provider payload.
       const message = error instanceof Error ? error.message : '';
+      if (ingressUrl && (message.includes("hasn't been verified") || message.includes('verification handshake'))) {
+        throw new SetupError(`Slack event delivery is not verified yet. In your Slack app’s Event Subscriptions, enable events and set Request URL to ${ingressUrl}. Wait for Verified, subscribe to the bot event message.im, and save. Then click Update connection here. No new Slack approval is needed.`);
+      }
       if (message.includes('missing_scope')) {
         const needed = message.match(/['"]needed['"]\s*:\s*['"]([^'"]+)['"]/)?.[1]
           .split(',').map((scope) => scope.trim()).filter((scope) => /^[a-z_]+:[a-z_.]+$/.test(scope)).slice(0, 10);

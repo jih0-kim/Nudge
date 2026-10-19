@@ -13,7 +13,15 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
       if (!job) return;
       try {
         const user = store.getUser(job.user_id);
+        const target = { workspaceId: user.team_id, channelId: user.channel_id };
         let response = job.reply;
+        let messageId = job.message_id ?? undefined;
+        if (job.kind === 'message' && response === null && !messageId && sender.start) {
+          try {
+            messageId = await sender.start(target, job.id);
+            store.saveMessageId(job.id, messageId);
+          } catch { /* A missing progress indicator must never prevent a reply. */ }
+        }
         if (response === null) {
           try { response = await reply(store, user, job.text); }
           catch {
@@ -23,7 +31,7 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
           }
           store.saveReply(job.id, response);
         }
-        await sender.send({ workspaceId: user.team_id, channelId: user.channel_id }, response, job.id);
+        await sender.send(target, response, job.id, messageId);
         store.finish(job);
       } catch {
         store.retry(job);
