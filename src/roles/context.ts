@@ -6,6 +6,7 @@ export type Runtime = {
   slack_channel?: string; // channel the quests go to, learned on first send
   slack_user?: string; // the connected Slack user's ID, the key of their coach memory
   slack_via?: SlackVia; // who sent to that channel; a bot DM and a self DM are different channels
+  quest_channels?: Record<string, string>; // quest_id -> channel it was sent to, when that differs over time
 };
 
 export type RunContext = {

@@ -19,9 +19,17 @@ import { isOpen, questStatuses } from "./quests.js";
 import { inRange, parseRange, wallTime } from "./time.js";
 import type { Event, HabitConfig } from "./types.js";
 
-export type RunOptions = { configPath: string; eventsPath: string; dry?: boolean; now?: Date };
+export const DEFAULT_CONFIG = process.env.NUDGLING_CONFIG ?? "examples/nudgling.yaml";
+export const DEFAULT_EVENTS = process.env.NUDGLING_EVENTS ?? "state/events.jsonl";
 
-export async function run({ configPath, eventsPath, dry = false, now = new Date() }: RunOptions) {
+export type RunOptions = { configPath?: string; eventsPath?: string; dry?: boolean; now?: Date };
+
+export async function run({
+  configPath = DEFAULT_CONFIG,
+  eventsPath = DEFAULT_EVENTS,
+  dry = false,
+  now = new Date(),
+}: RunOptions = {}) {
   const config = loadConfig(configPath);
   const runtimePath = join(dirname(eventsPath), "runtime.json");
   const before = readEvents(eventsPath);
@@ -53,7 +61,8 @@ export async function run({ configPath, eventsPath, dry = false, now = new Date(
     const slot = pickSlot(habit.id, ctx.events, config, now);
     log("Scheduler", `${habit.id}: ${slot.at.toISOString()}${slot.reason ? ` (${slot.reason})` : ""}`);
     const questId = `q-${now.getTime().toString(36)}`;
-    const slackTs = await sendQuest(ctx, habit, formatQuest(ctx, state.stage, options, slot, duration));
+    const sent = await sendQuest(ctx, habit, formatQuest(ctx, state.stage, options, slot, duration));
+    if (sent) ctx.runtime.quest_channels = { ...ctx.runtime.quest_channels, [questId]: sent.channel };
     record([
       {
         ts: now.toISOString(),
@@ -63,7 +72,7 @@ export async function run({ configPath, eventsPath, dry = false, now = new Date(
         options,
         slot: slot.at.toISOString(),
         duration_min: duration,
-        ...(slackTs ? { slack_ts: slackTs } : {}),
+        ...(sent ? { slack_ts: sent.ts } : {}),
       },
     ]);
   }
@@ -116,4 +125,25 @@ function readRuntime(path: string): Runtime {
 function writeRuntime(path: string, runtime: Runtime) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(runtime, null, 2) + "\n");
+}
+
+/**
+ * Runs the loop now and then every `minutes`, never two passes at once. For the server (src/index.ts).
+ * Returns a stop function that waits for a pass in progress.
+ */
+export function scheduleRuns(minutes: number): () => Promise<void> {
+  let running: Promise<unknown> | undefined;
+  const tick = () => {
+    running ??= run()
+      .catch((error) => log("Run", `failed: ${(error as Error).message}`))
+      .finally(() => (running = undefined));
+  };
+  const first = setTimeout(tick, 5_000);
+  const timer = setInterval(tick, minutes * 60_000);
+  log("Run", `nudge loop every ${minutes} min`);
+  return async () => {
+    clearTimeout(first);
+    clearInterval(timer);
+    await running;
+  };
 }

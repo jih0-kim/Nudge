@@ -5,13 +5,13 @@ import { loadConfig } from "../core/config.js";
 import { readEvents } from "../core/events.js";
 import { log } from "../core/log.js";
 import { computeState, thresholdsFor } from "../core/rules.js";
-import { run as runLoop } from "../core/run.js";
+import { DEFAULT_CONFIG, DEFAULT_EVENTS, run as runLoop } from "../core/run.js";
 import type { Event, PetState } from "../core/types.js";
 import { renderPet } from "../pet/render.js";
 
 const STAGE_NAMES = ["Egg", "Cracked", "Hatchling", "Child", "Teen", "Adult"];
-const CONFIG = process.env.NUDGLING_CONFIG ?? "examples/nudgling.yaml";
-const EVENTS = process.env.NUDGLING_EVENTS ?? "state/events.jsonl";
+const CONFIG = DEFAULT_CONFIG;
+const EVENTS = DEFAULT_EVENTS;
 const OUT = "out";
 
 function describe(state: PetState): string {

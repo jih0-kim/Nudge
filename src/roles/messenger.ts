@@ -47,7 +47,7 @@ export function formatQuest(
   return { main, thread };
 }
 
-/** Posts the quest and returns its Slack ts, or undefined when it only went to the console. */
+/** Posts the quest and returns where it went, or undefined when it only went to the console. */
 export async function sendQuest(ctx: RunContext, habit: HabitConfig, text: { main: string; thread?: string }) {
   const via = slackVia(ctx);
   if (ctx.dry || !via) {
@@ -55,13 +55,12 @@ export async function sendQuest(ctx: RunContext, habit: HabitConfig, text: { mai
     if (text.thread) console.log(indent(text.thread));
     return undefined;
   }
-  const channel = await resolveChannel(ctx, via);
-  const sent = await postMessage(via, channel, text.main);
+  const sent = await post(ctx, via, text.main);
   ctx.runtime.slack_channel = sent.channel;
   ctx.runtime.slack_via = via;
   if (text.thread) await postMessage(via, sent.channel, text.thread, sent.ts);
   log("Messenger", `quest for ${habit.id} sent via ${via} to ${sent.channel} (ts ${sent.ts})`);
-  return sent.ts;
+  return sent;
 }
 
 export async function announceEvolution(ctx: RunContext, from: number, to: number) {
@@ -71,7 +70,7 @@ export async function announceEvolution(ctx: RunContext, from: number, to: numbe
     log("Messenger", `${ctx.dry ? "[dry] " : ""}${text}`);
     return;
   }
-  await postMessage(via, await resolveChannel(ctx, via), text);
+  await post(ctx, via, text);
   log("Messenger", `evolution notice sent (${STAGE_NAMES[from]} -> ${STAGE_NAMES[to]})`);
 }
 
@@ -79,6 +78,24 @@ export async function announceEvolution(ctx: RunContext, from: number, to: numbe
 function slackVia(ctx: RunContext): SlackVia | undefined {
   if (ctx.toolkits.has("slackbot") && ctx.toolkits.has("slack")) return "slackbot";
   return ctx.toolkits.has("slack") ? "slack" : undefined;
+}
+
+/**
+ * Posts to the known channel. If that channel is gone for this sender (e.g. the Slackbot was reconnected as a
+ * different app), falls back to the user's ID, which opens a fresh DM.
+ */
+async function post(ctx: RunContext, via: SlackVia, text: string) {
+  const channel = await resolveChannel(ctx, via);
+  try {
+    return await postMessage(via, channel, text);
+  } catch (error) {
+    if (!/channel_not_found|not_in_channel/.test((error as Error).message) || channel !== ctx.runtime.slack_channel) throw error;
+    log("Messenger", `${channel} is not reachable via ${via} anymore, opening a new DM`);
+    ctx.runtime.slack_channel = undefined;
+    const sent = await postMessage(via, await resolveChannel(ctx, via), text);
+    ctx.runtime.slack_channel = sent.channel;
+    return sent;
+  }
 }
 
 /** NUDGLING_SLACK_CHANNEL, else the DM learned earlier for this sender, else the connected user's ID (opens a DM). */

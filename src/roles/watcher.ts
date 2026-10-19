@@ -11,8 +11,7 @@ const PICK_REPLY = /^\s*([123])\s*$/;
 const DONE_REACTIONS = ["white_check_mark", "heavy_check_mark", "ballot_box_with_check"];
 
 export async function watch(ctx: RunContext): Promise<Event[]> {
-  const channel = ctx.runtime.slack_channel;
-  if (!ctx.toolkits.has("slack") || !channel) {
+  if (!ctx.toolkits.has("slack") || !ctx.runtime.slack_channel) {
     log("Watcher", "Slack not connected or no quest sent yet, nothing to read");
     return [];
   }
@@ -21,6 +20,7 @@ export async function watch(ctx: RunContext): Promise<Event[]> {
   for (const q of questStatuses(ctx.events).values()) {
     const ts = q.proposed.slack_ts;
     if (q.completed || !ts || isStale(q, ctx.now)) continue;
+    const channel = ctx.runtime.quest_channels?.[q.proposed.quest_id] ?? ctx.runtime.slack_channel;
 
     // Our own posts carry bot_id (sent through the Composio app); the user's replies do not.
     const replies = (await getReplies(channel, ts)).filter((r) => !r.bot_id && r.text?.trim());
