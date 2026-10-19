@@ -4,6 +4,7 @@ import { log } from "../core/log.js";
 import { friendlyTime } from "../core/time.js";
 import { isOpen, questStatuses } from "../core/quests.js";
 import { petGifUrl, STAGE_EMOJI, STAGE_NAMES, statusLine } from "../core/status.js";
+import { petLevel } from "../pet/render.js";
 import type { HabitConfig, PetState, QuestOption } from "../core/types.js";
 import type { RunContext } from "./context.js";
 import type { Slot } from "./scheduler.js";
@@ -46,7 +47,7 @@ export function formatQuest(
     ? rest.map((o, i) => `${NUMBERS[i + 1]} *${o.what}*\n${o.material}${o.sources.map((s) => `\n   • ${s}`).join("")}`).join("\n\n") +
       "\n\nCan't react? Reply 1, 2, or 3 here."
     : undefined;
-  return { main, thread, image: petGifUrl(state.stage) };
+  return { main, thread, image: petGifUrl(petLevel(state)) };
 }
 
 /** Posts the quest and returns where it went, or undefined when it only went to the console. */
@@ -65,14 +66,14 @@ export async function sendQuest(ctx: RunContext, habit: HabitConfig, text: { mai
   return sent;
 }
 
-export async function announceEvolution(ctx: RunContext, from: number, to: number) {
+export async function announceEvolution(ctx: RunContext, from: number, to: number, state: PetState) {
   const text = `${STAGE_EMOJI[to]} *${ctx.config.pet.name} evolved!* ${STAGE_NAMES[from]} → *${STAGE_NAMES[to]}*`;
   const via = slackVia(ctx);
   if (ctx.dry || !via) {
     log("Messenger", `${ctx.dry ? "[dry] " : ""}${text}`);
     return;
   }
-  await post(ctx, via, text, petGifUrl(to));
+  await post(ctx, via, text, petGifUrl(petLevel(state)));
   log("Messenger", `evolution notice sent (${STAGE_NAMES[from]} -> ${STAGE_NAMES[to]})`);
 }
 

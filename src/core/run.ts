@@ -77,7 +77,7 @@ export async function run({
     ]);
   }
 
-  if (evolved?.type === "evolved") await announceEvolution(ctx, evolved.from, evolved.to);
+  if (evolved?.type === "evolved") await announceEvolution(ctx, evolved.from, evolved.to, state);
   await remindOnce(ctx);
   render(ctx, state);
 
