@@ -47,7 +47,7 @@ export function formatQuest(
     ? rest.map((o, i) => `${NUMBERS[i + 1]} *${o.what}*\n${o.material}${o.sources.map((s) => `\n   • ${s}`).join("")}`).join("\n\n") +
       "\n\nCan't react? Reply 1, 2, or 3 here."
     : undefined;
-  return { main, thread, image: petGifUrl(petLevel(state)) };
+  return { main, thread, image: petGifUrl(petLevel(state), state.mood) };
 }
 
 /** Posts the quest and returns where it went, or undefined when it only went to the console. */
@@ -73,7 +73,7 @@ export async function announceEvolution(ctx: RunContext, from: number, to: numbe
     log("Messenger", `${ctx.dry ? "[dry] " : ""}${text}`);
     return;
   }
-  await post(ctx, via, text, petGifUrl(petLevel(state)));
+  await post(ctx, via, text, petGifUrl(petLevel(state), state.mood));
   log("Messenger", `evolution notice sent (${STAGE_NAMES[from]} -> ${STAGE_NAMES[to]})`);
 }
 

@@ -22,6 +22,9 @@ const C = {
 const W = 3.2; // outline width
 const EASE = 'calcMode="spline" keyTimes="0;0.5;1" keySplines=".45 0 .55 1;.45 0 .55 1"';
 
+/** A level that shows each stage well, used for the six sleepy GIFs. */
+export const SLEEPY_LEVEL = [0, 3, 14, 30, 52, 66];
+
 export function stageOf(level: number): number {
   let s = 0;
   STAGE_AT.forEach((at, i) => level >= at && (s = i));
@@ -62,7 +65,7 @@ function face(y: number, mood: Mood, size = 1): string {
 }
 
 /** Sprout on the head: longer stem and more leaves as the level grows; a flower at adult. */
-function sprout(level: number, x: number, y: number): string {
+function sprout(level: number, x: number, y: number, mood: Mood = "normal"): string {
   const len = 12 + level * 0.32;
   const leaves = Math.min(6, 1 + Math.floor(level / 10));
   const leaf = (side: number, at: number, k: number) =>
@@ -77,7 +80,8 @@ function sprout(level: number, x: number, y: number): string {
       .join("");
     parts += `<g transform="translate(0,${n(-len - 9)})">${petals}<circle r="3.6" fill="${C.gold}" stroke="${C.line}" stroke-width="1.6"/></g>`;
   }
-  return `<g transform="translate(${n(x)},${n(y)})"><g><animateTransform attributeName="transform" type="rotate" values="-7;7;-7" dur="4s" repeatCount="indefinite" ${EASE}/>${parts}</g></g>`;
+  const sway = mood === "sleepy" ? "26;32;26" : "-7;7;-7"; // a sleepy sprout droops to one side
+  return `<g transform="translate(${n(x)},${n(y)})"><g><animateTransform attributeName="transform" type="rotate" values="${sway}" dur="4s" repeatCount="indefinite" ${EASE}/>${parts}</g></g>`;
 }
 
 /** Little stars that collect around the pet, one every 11 levels. */
@@ -88,6 +92,18 @@ function stars(level: number): string {
     .map(([x, y], i) => {
       const twinkle = `<animate attributeName="opacity" values="1;0.35;1" dur="2s" begin="${-i * 0.5}s" repeatCount="indefinite"/>`;
       return `<path transform="translate(${100 + x},${178 + y}) scale(0.9)" d="M0,-7 L2,-2 L7,0 L2,2 L0,7 L-2,2 L-7,0 L-2,-2 Z" fill="${C.gold}" stroke="${C.line}" stroke-width="1.4" stroke-linejoin="round">${twinkle}</path>`;
+    })
+    .join("");
+}
+
+/** Three Z's drifting up from the top right while sleepy (paths, no fonts). */
+function zzz(): string {
+  return [0, 1, 2]
+    .map((i) => {
+      const k = 0.7 + i * 0.25;
+      const drift = `<animateTransform attributeName="transform" type="translate" values="0 6;0 -6" dur="4s" begin="${-i * 1.33}s" repeatCount="indefinite"/>`;
+      const fade = `<animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.7;1" dur="4s" begin="${-i * 1.33}s" repeatCount="indefinite"/>`;
+      return `<g transform="translate(${142 + i * 13},${n(62 - i * 18)}) scale(${n(k)})"><g>${drift}${fade}<path d="M-5,-5 H5 L-5,5 H5" fill="none" stroke="${C.line}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></g></g>`;
     })
     .join("");
 }
@@ -110,7 +126,7 @@ function egg(level: number, mood: Mood): string {
     let d = `M${n(-span / 2)},-84`;
     for (let i = 1; i <= teeth; i++) d += ` L${n(-span / 2 + (span * i) / teeth)},${i % 2 ? -92 : -84}`;
     inner += `<path d="${d}" fill="none" stroke="${C.line}" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/>`;
-    inner = sprout(level, 0, -h + 2) + inner + face(-58, mood, 0.9);
+    inner = sprout(level, 0, -h + 2, mood) + inner + face(-58, mood, 0.9);
   } else {
     inner += `<path d="M-14,-56 q4,3 8,0 M6,-56 q4,3 8,0" fill="none" stroke="${C.eye}" stroke-width="2.4" stroke-linecap="round"/>`;
     inner += `<ellipse cx="-22" cy="-46" rx="8" ry="5" fill="${C.blush}" opacity="0.7" filter="url(#soft)"/><ellipse cx="22" cy="-46" rx="8" ry="5" fill="${C.blush}" opacity="0.7" filter="url(#soft)"/>`;
@@ -127,7 +143,7 @@ function hatchling(level: number, mood: Mood): string {
   const shine = `<ellipse cx="-20" cy="${n(top + 18)}" rx="6" ry="9" fill="#FFFFFF" opacity="0.9" transform="rotate(-25 -20 ${n(top + 18)})"/>`;
   const shell = `<path d="M-50,-56 L-38,-45 L-26,-57 L-13,-46 L0,-58 L13,-46 L26,-57 L38,-45 L50,-56 C54,-28 44,0 0,0 C-44,0 -54,-28 -50,-56 Z" fill="${C.shell}" stroke="${C.line}" stroke-width="${W}" stroke-linejoin="round"/>${spots}`;
   const paws = `<ellipse cx="-27" cy="-52" rx="8" ry="6" fill="${C.body}" stroke="${C.line}" stroke-width="2.8"/><ellipse cx="27" cy="-52" rx="8" ry="6" fill="${C.body}" stroke="${C.line}" stroke-width="2.8"/>`;
-  const moving = bob(3, sprout(level, 0, top + 1) + body + shine + face(top + 32, mood));
+  const moving = bob(3, sprout(level, 0, top + 1, mood) + body + shine + face(top + 32, mood));
   return `<g transform="translate(100,178)">${moving}${shell}${bob(1.5, paws)}</g>`;
 }
 
@@ -166,7 +182,7 @@ function mochi(level: number, mood: Mood): string {
     face(-h + 44, mood, 1.1) +
     arms +
     cap;
-  const head = sprout(level, 0, -h + 2);
+  const head = sprout(level, 0, -h + 2, mood);
   const squish = `<animateTransform attributeName="transform" type="scale" values="1 1;1.03 0.97;1 1" dur="2s" repeatCount="indefinite" ${EASE}/>`;
   return `<g transform="translate(100,178) scale(${n(scale)})">${feet}<g>${squish}${bob(2, head + body)}</g></g>`;
 }
