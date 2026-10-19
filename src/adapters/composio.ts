@@ -2,7 +2,7 @@ import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
 import { requireEnv } from '../core/env.js';
 
-export const toolkits = ['slack', 'github', 'googlecalendar'] as const;
+export const toolkits = ['slack', 'slackbot', 'github', 'googlecalendar'] as const;
 export type Toolkit = (typeof toolkits)[number];
 
 export function getComposioClient() {
