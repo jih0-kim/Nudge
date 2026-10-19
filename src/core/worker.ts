@@ -27,10 +27,13 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
         }
         if (response === null) {
           try { response = await reply(store, user, job.text); }
-          catch {
+          catch (error) {
             // Do not replay model mutations on network delivery retries.
-            response = 'I couldn’t finish that request. Use "help" for the supported formats. If you asked for a change, check "memory", "reminders", or "progress" before trying again.';
-            console.error(`Coach request failed for job ${job.id}`);
+            response = 'My AI response failed just now—this is a server problem, not your message. Simple commands such as "help" still work. If you asked me to save or change something, check "memory", "reminders", or "progress" before retrying.';
+            // Record diagnostic metadata only: provider messages/bodies can
+            // include personal context, tool arguments, or credentials.
+            const failure = error as { name?: string; statusCode?: number } | undefined;
+            console.error('Coach request failed', JSON.stringify({ jobId: job.id, name: failure?.name, status: failure?.statusCode }));
           }
           store.saveReply(job.id, response);
           timing('reply-prepared');
