@@ -23,7 +23,7 @@ function describe(state: PetState): string {
 }
 
 function status() {
-  console.log(currentStatus(CONFIG, EVENTS).replace(/\*/g, ""));
+  console.log(currentStatus(CONFIG, EVENTS).text.replace(/\*/g, ""));
 }
 
 function render() {

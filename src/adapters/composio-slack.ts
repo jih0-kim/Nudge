@@ -1,6 +1,7 @@
 import type { IncomingTriggerPayload } from '@composio/core';
 import type { MessageSender, MessageTarget } from '../core/messaging.js';
 import { getComposioClient } from './composio.js';
+import { splitPetImage } from '../core/status.js';
 
 export const SLACK_DM_TRIGGER = 'SLACKBOT_DIRECT_MESSAGE_RECEIVED';
 export const SLACK_SEND_TOOL = 'SLACKBOT_SEND_MESSAGE';
@@ -68,7 +69,8 @@ export class ComposioSlackSender implements MessageSender {
     return this.cached;
   }
 
-  async send(target: MessageTarget, text: string, _deliveryId: number) {
+  async send(target: MessageTarget, reply: string, _deliveryId: number) {
+    const { imageUrl, text } = splitPetImage(reply);
     try {
       const { session, workspaceId } = await this.connection();
       if (workspaceId !== target.workspaceId) throw new Error('Slack workspace does not match the message recipient');
@@ -77,7 +79,10 @@ export class ComposioSlackSender implements MessageSender {
       // Plain text blocks prevent Markdown memory from generating mentions/links.
       toolData(await session.execute(SLACK_SEND_TOOL, {
         channel: target.channelId,
-        blocks: chunks.map((chunk) => ({ type: 'section', text: { type: 'plain_text', text: chunk, emoji: false } })),
+        blocks: [
+          ...(imageUrl ? [{ type: 'image', image_url: imageUrl, alt_text: 'Nudgling' }] : []),
+          ...chunks.map((chunk) => ({ type: 'section', text: { type: 'plain_text', text: chunk, emoji: false } })),
+        ],
         fallback_text: text.slice(0, 200),
         unfurl_links: false,
         unfurl_media: false,

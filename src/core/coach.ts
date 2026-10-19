@@ -1,7 +1,7 @@
 import { generateText, isStepCount, jsonSchema, tool } from 'ai';
 import { getLanguageModel } from '../adapters/llm.js';
 import type { Store, User } from './store.js';
-import { currentStatus } from './status.js';
+import { currentStatus, withPetImage } from './status.js';
 
 const help = `I'm your habit coach. No signup needed—your Slack identity keeps your memory separate.
 
@@ -89,7 +89,10 @@ export async function replyToUser(store: Store, user: User, input: string): Prom
     return 'Nice work—activity saved.';
   }
   if (/^(status|pet)$/i.test(text)) {
-    try { return currentStatus(); }
+    try {
+      const { text: status, imageUrl } = currentStatus();
+      return withPetImage(imageUrl, status.replace(/\*/g, '')); // the sender posts plain text
+    }
     catch { return 'No Nudgling yet. Start the nudge loop so your first quest arrives.'; }
   }
   if (/^progress$/i.test(text)) {

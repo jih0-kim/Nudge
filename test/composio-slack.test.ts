@@ -1,3 +1,4 @@
+import { withPetImage } from '../src/core/status.js';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { test } from 'node:test';
@@ -111,4 +112,23 @@ test('failed tool results throw even when no error string is provided, and sessi
   await assert.rejects(sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'Hello', 1), /execution failed/);
   await assert.rejects(sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'Hello', 1));
   assert.equal(created, 2);
+});
+
+test('sender puts our pet GIF above the text and ignores other image markers', async () => {
+  const sent: unknown[] = [];
+  const session: MessagingSession = { execute: async (slug, args) => {
+    if (slug === 'SLACKBOT_FETCH_TEAM_INFO') return completed({ team: { id: 'T1' } });
+    sent.push(args?.blocks);
+    return completed({ ok: true });
+  } };
+  const sender = new ComposioSlackSender(async () => session);
+  const gif = 'https://raw.githubusercontent.com/jih0-kim/Nudge/main/assets/gif/stage1.gif';
+  await sender.send({ workspaceId: 'T1', channelId: 'D1' }, withPetImage(gif, 'Cracked'), 1);
+  await sender.send({ workspaceId: 'T1', channelId: 'D1' }, withPetImage('https://evil.example/x.gif', 'Hi'), 2);
+  assert.deepEqual(sent[0], [
+    { type: 'image', image_url: gif, alt_text: 'Nudgling' },
+    { type: 'section', text: { type: 'plain_text', text: 'Cracked', emoji: false } },
+  ]);
+  assert.equal((sent[1] as { type: string }[]).length, 1);
+  assert.equal((sent[1] as { type: string }[])[0].type, 'section');
 });

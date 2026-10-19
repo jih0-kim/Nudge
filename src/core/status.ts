@@ -17,6 +17,23 @@ export function petGifUrl(stage: number): string {
   return `${GIF_BASE}/stage${Math.min(stage, GIF_STAGES - 1)}.gif`;
 }
 
+/**
+ * Coach replies are plain strings (queued and retried as text), so an image rides along as a first-line marker
+ * that the Slack sender turns into an image block. Only our own pet GIFs are accepted, so model output can't
+ * smuggle in arbitrary images.
+ */
+const MARKER = /^\[\[pet-image:(\S+)\]\]\n/;
+
+export function withPetImage(url: string, text: string): string {
+  return `[[pet-image:${url}]]\n${text}`;
+}
+
+export function splitPetImage(text: string): { imageUrl?: string; text: string } {
+  const m = MARKER.exec(text);
+  if (!m || !m[1].startsWith(`${GIF_BASE}/`)) return { text };
+  return { imageUrl: m[1], text: text.slice(m[0].length) };
+}
+
 const MOOD = { sparkle: "✨ sparkly", normal: "🙂 fine", sleepy: "😴 sleepy" } as const;
 
 function bar(reps: number, target: number, width = 10): string {
@@ -43,7 +60,8 @@ export function statusLine(state: PetState, config: Config): string {
 }
 
 /** Status from the config and event log on disk. */
-export function currentStatus(configPath = DEFAULT_CONFIG, eventsPath = DEFAULT_EVENTS, now = new Date()): string {
+export function currentStatus(configPath = DEFAULT_CONFIG, eventsPath = DEFAULT_EVENTS, now = new Date()) {
   const config = loadConfig(configPath);
-  return formatStatus(computeState(readEvents(eventsPath), config, now), config);
+  const state = computeState(readEvents(eventsPath), config, now);
+  return { text: formatStatus(state, config), imageUrl: petGifUrl(state.stage) };
 }
