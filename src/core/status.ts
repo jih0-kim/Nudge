@@ -3,7 +3,8 @@ import { loadConfig } from "./config.js";
 import { readEvents } from "./events.js";
 import { computeState, thresholdsFor } from "./rules.js";
 import { petLevel } from "../pet/render.js";
-import type { Config, PetState } from "./types.js";
+import { stageOf } from "../pet/draw.js";
+import type { Config, Mood, PetState } from "./types.js";
 
 export const DEFAULT_CONFIG = process.env.NUDGLING_CONFIG ?? "examples/nudgling.yaml";
 export const DEFAULT_EVENTS = process.env.NUDGLING_EVENTS ?? "state/events.jsonl";
@@ -13,8 +14,11 @@ export const STAGE_EMOJI = ["🥚", "🐣", "🐥", "🐤", "🐦", "🦚"];
 /** One animated GIF per growth level (assets/gif/level-NN.gif, see scripts/make-gifs.mjs), served from the public repo. */
 const GIF_BASE = process.env.NUDGLING_GIF_BASE ?? "https://raw.githubusercontent.com/jih0-kim/Nudge/main/assets/gif";
 
-export function petGifUrl(level: number): string {
-  return `${GIF_BASE}/level-${String(Math.max(0, Math.min(66, level))).padStart(2, "0")}.gif`;
+/** Sleepy pets use one GIF per stage (assets/gif/sleepy-N.gif); the rest one per level. */
+export function petGifUrl(level: number, mood?: Mood): string {
+  const l = Math.max(0, Math.min(66, level));
+  if (mood === "sleepy") return `${GIF_BASE}/sleepy-${stageOf(l)}.gif`;
+  return `${GIF_BASE}/level-${String(l).padStart(2, "0")}.gif`;
 }
 
 /**
@@ -63,5 +67,5 @@ export function statusLine(state: PetState, config: Config): string {
 export function currentStatus(configPath = DEFAULT_CONFIG, eventsPath = DEFAULT_EVENTS, now = new Date()) {
   const config = loadConfig(configPath);
   const state = computeState(readEvents(eventsPath), config, now);
-  return { text: formatStatus(state, config), imageUrl: petGifUrl(petLevel(state)) };
+  return { text: formatStatus(state, config), imageUrl: petGifUrl(petLevel(state), state.mood) };
 }
