@@ -33,8 +33,8 @@ export function formatQuest(
     ...first.sources.map((s) => `   • ${s}`),
     "",
     rest.length
-      ? `React ${NUMBERS.slice(0, options.length).join(" ")} to pick (other options in thread).`
-      : "React 1️⃣ to accept.",
+      ? `React ${NUMBERS.slice(0, options.length).join(" ")} on this message to pick (other options in thread).`
+      : "React 1️⃣ on this message to accept.",
     "When done, reply in this thread with a one-line summary.",
   ]
     .filter((l, i, all) => l !== "" || all[i - 1] !== "")
