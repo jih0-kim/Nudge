@@ -6,11 +6,17 @@ import { publicBaseUrl } from './slack-setup.js';
 export const personalApps = ['gmail', 'googlecalendar', 'github'] as const;
 export type PersonalApp = typeof personalApps[number];
 export const appNames: Record<PersonalApp, string> = { gmail: 'Gmail', googlecalendar: 'Google Calendar', github: 'GitHub' };
+export interface GitHubRepositoryPage {
+  repositories: { name: string; url: string; description: string | null; private: boolean; language: string | null }[];
+  page: number;
+  mayHaveMore: boolean;
+}
 export interface ConnectionProvider {
   configured(app: PersonalApp): boolean;
   authorize(user: string, app: PersonalApp, callback: string): Promise<{ accountId: string; redirectUrl: string }>;
   active(user: string, app: PersonalApp, accountId: string): Promise<boolean>;
   remove(accountId: string): Promise<void>;
+  listGitHubRepositories?(user: string, accountId: string, page: number): Promise<GitHubRepositoryPage>;
 }
 type Session = { hash: string; user_id: number; expires: number };
 type Pending = { session: string; app: PersonalApp; account: string; expires: number };
@@ -96,6 +102,21 @@ export class AppConnections {
     if (!active) throw new Error('Approval was not completed. Please connect again.');
     const result = this.store.db.prepare('INSERT INTO app_connections VALUES (?, ?, ?) ON CONFLICT(user_id, app) DO NOTHING').run(session.user_id, pending.app, pending.account);
     if (!result.changes) throw new Error('An account is already connected. Disconnect it before connecting again.');
+  }
+
+  async listGitHubRepositories(userId: number, page = 1): Promise<GitHubRepositoryPage> {
+    if (!Number.isInteger(page) || page < 1 || page > 100) throw new Error('Choose a repository page between 1 and 100.');
+    const provider = this.provider;
+    if (!provider?.configured('github') || !provider.listGitHubRepositories) throw new Error('GitHub repository access is not configured by the operator yet.');
+    const current = () => (this.store.db.prepare("SELECT account FROM app_connections WHERE user_id = ? AND app = 'github'").get(userId) as { account: string } | undefined)?.account;
+    const account = current();
+    if (!account) throw new Error('Connect GitHub first: send "connections" and use your private link.');
+    const identity = this.identity(userId);
+    if (!await provider.active(identity, 'github', account)) throw new Error('Your GitHub authorization needs reconnecting. Send "connections" to reconnect it.');
+    if (current() !== account) throw new Error('Your GitHub connection changed. Please retry.');
+    const result = await provider.listGitHubRepositories(identity, account, page);
+    if (current() !== account) throw new Error('Your GitHub connection changed. Please retry.');
+    return result;
   }
 
   async disconnect(session: Session, app: PersonalApp) {

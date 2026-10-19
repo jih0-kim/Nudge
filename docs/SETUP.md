@@ -44,9 +44,12 @@ remember I prefer five-minute reading sessions after breakfast
 memory
 done Read for five minutes
 progress
+repos
 ```
 
 With OpenAI configured, chat naturally about habits and specific reminder dates. Explicit commands also include `remind <future ISO timestamp with timezone offset> <message>`, `reminders`, and `cancel <id>`.
+
+After connecting GitHub from your private apps page, ask “what repos do I have?” or send `repos`. Repository lists are read-only and limited to that connection’s permissions. Results are paginated in groups of 20; use `repos 2` for page two. Repository metadata may be sent to OpenAI for natural-language answers. No GitHub writes, pull-request creation, email access, or calendar access are enabled.
 
 Memory is keyed by workspace and Slack user. `forget memory` clears memory and recent chat context, not activities or reminders. Relevant context is sent to OpenAI; never store credentials or highly sensitive information in chat.
 
