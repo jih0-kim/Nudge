@@ -228,3 +228,9 @@ npm-debug.log*
 !.env.example
 out/
 state/
+
+# Private user memory and SQLite journal files
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

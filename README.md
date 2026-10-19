@@ -1,6 +1,6 @@
 # Nudge
 
-Nudgling is a habit-building assistant with a virtual pet. This repository currently provides a minimal Node.js, TypeScript, and Hono server; habit logic and integrations are not implemented yet.
+Nudgling is a habit-building assistant with persistent Markdown memory, Slack DMs, one-time reminders, and activity logging. Multiple users in one Slack workspace can use it without a separate signup. The virtual pet and recurring habit schedules are not implemented yet.
 
 ## Getting started
 
@@ -13,6 +13,8 @@ npm run dev
 ```
 
 The server defaults to `http://localhost:3000`. Set `PORT` in `.env` to change it.
+
+Set your Composio project API key in `.env`, then open the **private installer link** printed at startup using your public HTTPS hostname. Click **Connect Slack** and approve the workspace. Nudge saves the connection and configures message delivery automatically—no Slack CLI commands, copied account IDs, or restart. See [browser setup](docs/SETUP.md).
 
 ## Commands
 
@@ -27,20 +29,51 @@ Both server commands load `.env`; copy `.env.example` before running them.
 
 ## Endpoints
 
-- `GET /` — application name and description
+- `GET /` — opens the setup page
+- `GET /setup` — protected installer UI (private link unlocks admin actions)
 - `GET /health` — `{ "ok": true }`
+- `POST /webhooks/composio` — signed Composio trigger events (enabled after Slackbot setup)
 
-Unknown routes and unexpected errors return JSON responses. Requests are logged to the console.
+Unknown routes and unexpected errors return JSON responses. Request paths are logged without query strings, so OAuth state is not logged.
 
 ## Structure
 
 ```text
 src/
-  app.ts      # Hono app, middleware, and routes
-  index.ts    # Node.js server startup
+  app.ts                    # Hono app factory; no network or database side effects
+  index.ts                  # Server startup and dependency wiring
+  core/
+    store.ts                # SQLite memory, reminders, activity, and durable jobs
+    settings.ts             # Private installation settings, separate from user memory
+    coach.ts                # Conversation and user-scoped habit tools
+    messaging.ts            # Transport-independent message sender contract
+    worker.ts               # Background job processing and delivery retries
+  adapters/
+    composio.ts             # Shared Composio client and general integrations
+    composio-slack.ts       # Account-bound Slackbot sessions and webhook verification
+    composio-setup.ts       # Managed OAuth, trigger and webhook provisioning
+    llm.ts                  # OpenAI model adapter
+    parallel.ts             # Web search adapter
+  services/
+    slack-events.ts         # Verified Slackbot events → user-scoped durable jobs
+    slack-setup.ts          # Browser-bound authorization and installation workflow
+    setup-auth.ts           # Private installer access and sessions
+    slack-runtime.ts        # Activate installed transport without restarting
+  surfaces/
+    composio.ts             # HTTP webhook handling
+    setup.ts                # Installer HTTP routes and security boundaries
+    setup-page.ts           # Browser onboarding UI
 ```
 
-Shared types can be added to `src/types.ts` when the first feature needs them.
+The habit worker depends on a message-sender interface, not the Composio SDK. Slack transport tools are fixed in application code and are never given to the model.
+
+## Slack coach and SQLite
+
+See **[browser setup](docs/SETUP.md)** for Composio authorization and installation. No raw Slack tokens, signing secrets, or account IDs need to be copied into `.env`. SQLite initializes automatically at `data/nudge.sqlite` and stores both installation state and per-user data in separate tables. Keep this directory on persistent disk.
+
+DM the bot `help`, `remember <preference>`, `memory`, `timezone <IANA zone>`, `remind <ISO timestamp> <message>`, `reminders`, `cancel <id>`, `done <activity>`, or `progress`. With `OPENAI_API_KEY` configured, you can also chat naturally; the coach uses user-scoped tools to save memories, set reminders, and log activity.
+
+`forget memory` clears personal memory and recent chat context, but not activity or reminders. Relevant memory and recent context are sent to OpenAI for chat. Reminders are currently one-time, without quiet hours or recurring schedules.
 
 ## AI and integrations
 
@@ -49,7 +82,8 @@ Add the values from `.env.example` to your local `.env`. Integrations initialize
 | Integration | Required environment variables |
 | --- | --- |
 | Vercel AI SDK (official OpenAI provider) | `OPENAI_API_KEY`; optional `OPENAI_MODEL` (defaults to `gpt-4o-mini`) |
-| Composio + AI SDK provider | `COMPOSIO_API_KEY`, `COMPOSIO_USER_ID` (a stable ID for your user) |
+| Composio Slackbot | `COMPOSIO_API_KEY`; optional `COMPOSIO_USER_ID` (defaults to `local-user`, saved with the installation) |
+| Browser setup | Optional `APP_BASE_URL` and `NUDGE_SETUP_TOKEN`; otherwise use the detected public address and generated private key |
 | Parallel Search | `PARALLEL_API_KEY` |
 
 Get keys from [OpenAI](https://platform.openai.com/api-keys), the [Composio dashboard](https://dashboard.composio.dev/settings), and [Parallel](https://platform.parallel.ai/). The older generic `LLM_*` variables in the product spec are not used by this implementation.
@@ -59,17 +93,16 @@ Local smoke commands (these contact real services and may incur charges):
 ```sh
 npm run integrations -- ai "Suggest one small reading habit"
 npm run integrations -- search "robot manipulation research papers"
-npm run integrations -- connect slack
 npm run integrations -- connect github
 npm run integrations -- connect googlecalendar
 npm run integrations -- tools
 ```
 
-The `connect` command prints an authorization URL to open in your browser. Composio may require auth configs in its dashboard first. The `tools` command lists AI SDK-compatible session tool names without executing them. Sessions are restricted to Slack, GitHub, and Google Calendar.
+The integration smoke commands are for development only; Slack onboarding lives entirely in the browser. The general `tools` command lists AI SDK-compatible session tool names without executing them. Runtime Slackbot sessions allow only message sending and workspace lookup on the installed connected account.
 
 Adapters live in `src/adapters/{llm,composio,parallel}.ts`. `getLanguageModel()` can be passed to AI SDK calls, `searchWeb()` returns Parallel results with URLs and excerpts, and `createComposioSession()` provides `session.tools()` for future agent wiring. Save `session.sessionId` and reuse it with `getComposioClient().use(sessionId)` for multi-turn agents.
 
-No paid API or tool-execution routes are exposed over HTTP. Tool execution and user-approval checks are deliberately not wired into an autonomous agent yet.
+The signed Composio endpoint can invoke OpenAI and a limited set of user-scoped habit tools. Composio sends replies and reminders using the connected Slackbot account. Calendar changes, profile commits, and unrestricted Composio tools are not exposed to the coach.
 
 Run keyless adapter checks with `npm test`.
 
