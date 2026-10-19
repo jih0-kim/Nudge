@@ -8,251 +8,231 @@ import { Store } from '../src/core/store.js';
 import { Settings } from '../src/core/settings.js';
 import { SetupAuth } from '../src/services/setup-auth.js';
 import { SlackSetup, SetupError, publicBaseUrl, type SlackInstallation, type SlackSetupProvider } from '../src/services/slack-setup.js';
-import { ComposioSetupProvider, SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from '../src/adapters/composio-setup.js';
+import { ComposioSetupProvider } from '../src/adapters/composio-setup.js';
+import { AppConnections } from '../src/services/app-connections.js';
 
 function fixture() {
-  const store = new Store(':memory:');
-  const settings = new Settings(store.db);
-  let callback = '';
-  let active = true;
-  let triggerFails = false;
-  const activated: SlackInstallation[] = [];
-  const checkedAccounts: string[] = [];
+  const store = new Store(':memory:'); const settings = new Settings(store.db);
+  let callback = ''; let active = true; let ready = false;
+  const activated: SlackInstallation[] = []; const checked: string[] = [];
   const provider: SlackSetupProvider = {
     authorize: async (url) => { callback = url; return { accountId: 'ca_expected', redirectUrl: 'https://connect.composio.dev/approve' }; },
-    isActive: async (id) => { checkedAccounts.push(id); return active; },
-    configureWebhook: async () => ({ subscriptionId: 'sub_1', secret: 'private-webhook-secret' }),
-    enableTrigger: async () => { if (triggerFails) throw new Error('provider error with sensitive details'); return 'ti_1'; },
+    isActive: async (id) => { checked.push(id); return active; },
   };
-  const setup = new SlackSetup(settings, provider, 'owner', (value) => activated.push(value), true);
-  return { store, settings, setup, activated, checkedAccounts, provider,
+  const setup = new SlackSetup(settings, provider, 'owner', (value) => { activated.push(value); }, true, undefined,
+    () => ({ ready, configured: ready }), async () => { ready = true; });
+  return { store, settings, provider, setup, activated, checked,
     state: () => new URL(callback).searchParams.get('state')!,
-    setActive: (value: boolean) => { active = value; },
-    failTrigger: (value: boolean) => { triggerFails = value; },
-  };
+    setActive: (value: boolean) => { active = value; }, setReady: (value: boolean) => { ready = value; } };
 }
 
-test('setup keys have rate-limited login and expiring, revocable sessions', () => {
-  const auth = new SetupAuth('private-access-token');
+test('setup login is rate limited; sessions expire, revoke and survive restarts but not key rotation', (t) => {
+  const f = fixture(); t.after(() => f.store.close());
+  const auth = new SetupAuth('key', f.settings);
   for (let i = 0; i < 10; i++) assert.equal(auth.unlock('wrong', 1000), undefined);
-  assert.equal(auth.unlock('private-access-token', 1000), undefined);
-  const token = auth.unlock('private-access-token', 62_000)!;
-  assert.ok(token);
-  assert.ok(auth.session(token, 62_001));
-  assert.equal(auth.session(token, 62_000 + 8 * 60 * 60_000), undefined);
-  auth.logout(token);
-  assert.equal(auth.session(token, 62_001), undefined);
+  assert.equal(auth.unlock('key', 1000), undefined);
+  const old = auth.unlock('key', 62_000)!; assert.ok(old);
+  assert.equal(auth.session(old, 62_000 + 8 * 60 * 60_000), undefined);
+  const token = auth.unlock('key')!;
+  const reloaded = new SetupAuth('key', f.settings);
+  assert.equal(reloaded.session(token), auth.session(token));
+  assert.equal(new SetupAuth('rotated', f.settings).session(token), undefined);
+  assert.doesNotMatch(JSON.stringify(f.settings.get('setup.sessions')), new RegExp(token));
+  reloaded.logout(token); assert.equal(new SetupAuth('key', f.settings).session(token), undefined);
 });
 
 test('public addresses require HTTPS without paths, credentials or queries', () => {
   assert.equal(publicBaseUrl('https://nudge.example/'), 'https://nudge.example');
-  for (const address of ['http://localhost:3000', 'https://user:pass@example.com', 'https://example.com/other', 'https://example.com?secret=x', 'not a url']) {
-    assert.throws(() => publicBaseUrl(address));
-  }
+  for (const value of ['http://localhost:3000', 'https://user:pass@example.com', 'https://example.com/other', 'https://example.com?secret=x', 'not a url']) assert.throws(() => publicBaseUrl(value));
 });
 
-test('OAuth completion is browser-bound and state-checked, saves installation and activates immediately', async (t) => {
+test('OAuth is browser/state bound, trusts only the pending account, and stores no delivery scaffolding', async (t) => {
   const f = fixture(); t.after(() => f.store.close());
-  assert.equal(await f.setup.connect('browser-1', 'https://nudge.example'), 'https://connect.composio.dev/approve');
-  const state = f.state();
-  await assert.rejects(f.setup.complete('browser-2', state), /another browser/);
-  await assert.rejects(f.setup.complete('browser-1', 'wrong'), /another browser/);
+  await f.setup.connect('browser', 'https://nudge.example'); const state = f.state();
+  await assert.rejects(f.setup.complete('another-browser', state));
+  await assert.rejects(f.setup.complete('browser', 'wrong'));
   assert.equal(f.activated.length, 0);
-  await f.setup.complete('browser-1', state);
-  assert.deepEqual(f.checkedAccounts, ['ca_expected']);
+  await f.setup.complete('browser', state);
+  assert.deepEqual(f.checked, ['ca_expected']);
   assert.equal(f.activated.length, 1);
-  assert.equal(f.setup.status().ready, true);
-  assert.equal(f.setup.installation()?.connectedAccountId, 'ca_expected');
-  assert.equal(f.setup.installation()?.webhookSecret, 'private-webhook-secret');
-  assert.doesNotMatch(JSON.stringify(f.setup.status()), /private-webhook-secret|ca_expected|stateHash/);
-  await assert.rejects(f.setup.complete('browser-1', state)); // Cannot replay a completed callback.
+  assert.deepEqual(f.setup.installation(), { userId: 'owner', connectedAccountId: 'ca_expected', publicUrl: 'https://nudge.example' });
+  assert.equal(f.setup.status().ready, false); // OAuth alone does not prove bot/event delivery.
+  f.setReady(true); assert.equal(f.setup.status().ready, true);
+  await assert.rejects(f.setup.complete('browser', state));
+  assert.doesNotMatch(JSON.stringify(f.setup.status()), /ca_expected|stateHash/);
 });
 
-test('unapproved accounts cannot become active and expired flows are rejected', async (t) => {
-  const f = fixture(); t.after(() => f.store.close());
-  f.setActive(false);
+test('unapproved and expired OAuth flows cannot activate an installation', async (t) => {
+  const f = fixture(); t.after(() => f.store.close()); f.setActive(false);
   await f.setup.connect('browser', 'https://nudge.example');
   await assert.rejects(f.setup.complete('browser', f.state()), /approval is not complete/);
   assert.equal(f.setup.installation(), undefined);
-  const pending = f.settings.get<Record<string, unknown>>('slack.pending')!;
-  f.settings.set('slack.pending', { ...pending, expiresAt: 0 });
+  f.settings.set('slack.pending', { ...f.settings.get<object>('slack.pending'), expiresAt: 0 });
   await assert.rejects(f.setup.complete('browser', f.state()), /expired/);
 });
 
-test('partial setup can be retried without exposing provider errors or losing the secret', async (t) => {
+test('refresh and reconnect preserve personal memory and require authorization for app changes', async (t) => {
   const f = fixture(); t.after(() => f.store.close());
-  await f.setup.connect('browser', 'https://nudge.example');
-  f.failTrigger(true);
-  await assert.rejects(f.setup.complete('browser', f.state()), /Could not finish/);
-  assert.equal(f.setup.status().ready, false);
-  assert.equal(f.activated.length, 0);
-  assert.equal(f.setup.installation()?.webhookSecret, 'private-webhook-secret');
-  assert.doesNotMatch(JSON.stringify(f.setup.status()), /sensitive details|private-webhook-secret/);
-  f.failTrigger(false);
-  await f.setup.refresh('https://new-nudge.example');
-  assert.equal(f.setup.status().ready, true);
-  assert.equal(f.setup.installation()?.publicUrl, 'https://new-nudge.example');
-  const reloaded = new SlackSetup(f.settings, f.provider, 'owner', () => {}, true);
-  assert.equal(reloaded.status().ready, true);
-});
-
-test('HTTP onboarding protects status and mutations, uses secure cookies and ignores callback account IDs', async (t) => {
-  const f = fixture(); t.after(() => f.store.close());
-  const auth = new SetupAuth('private-installer-key');
-  const app = createApp(undefined, { auth, setup: f.setup });
-  let cookie = '';
-  const request = (path: string, body?: unknown, origin = 'https://nudge.example') => app.request(`https://nudge.example/setup${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { origin, 'content-type': 'application/json', cookie },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  const page = await request('');
-  assert.equal(page.status, 200);
-  assert.match(await page.text(), /Connect Slack/);
-  assert.match(page.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
-  assert.equal((await request('/api/status')).status, 401);
-  assert.equal((await request('/session', { token: 'private-installer-key' }, 'https://evil.example')).status, 403);
-  assert.equal((await request('/session', { token: 'wrong' })).status, 401);
-  const unlocked = await request('/session', { token: 'private-installer-key' });
-  assert.equal(unlocked.status, 200);
-  const setCookie = unlocked.headers.get('set-cookie')!;
-  assert.match(setCookie, /HttpOnly/);
-  assert.match(setCookie, /Secure/);
-  assert.match(setCookie, /SameSite=Lax/i);
-  cookie = setCookie.split(';')[0];
-  assert.equal((await request('/api/status')).status, 200);
-  assert.equal((await request('/connect', { publicUrl: 'https://other.example', consent: true })).status, 400);
-  assert.equal((await request('/connect', { publicUrl: 'https://nudge.example', consent: false })).status, 400);
-  const connect = await request('/connect', { publicUrl: 'https://nudge.example', consent: true });
-  assert.equal(connect.status, 200);
-  assert.deepEqual(await connect.json(), { redirectUrl: 'https://connect.composio.dev/approve' });
-  const callback = await request(`/callback?state=${f.state()}&connected_account_id=ca_attacker`);
-  assert.equal(callback.status, 302);
-  assert.equal(callback.headers.get('location'), '/setup');
-  assert.equal(f.setup.installation()?.connectedAccountId, 'ca_expected');
-  assert.equal((await request('/api/status')).headers.get('cache-control'), 'no-store');
-  await request('/logout', {});
-  assert.equal((await request('/api/status')).status, 401);
-});
-
-test('webhook dependencies can activate after setup without recreating the app', async (t) => {
-  const store = new Store(':memory:'); t.after(() => store.close());
-  let enabled = false;
-  const app = createApp(() => enabled ? {
-    store, connectedAccountId: 'ca_1', verify: async () => { throw new Error('invalid signature'); },
-  } : undefined);
-  assert.equal((await app.request('/webhooks/composio', { method: 'POST' })).status, 503);
-  enabled = true;
-  assert.equal((await app.request('/webhooks/composio', { method: 'POST' })).status, 401);
-});
-
-test('Composio onboarding refuses to overwrite another app’s webhook', async (t) => {
-  const f = fixture(); t.after(() => f.store.close());
-  const client = new Composio({ apiKey: 'test-key', provider: new VercelProvider(), allowTracking: false, disableVersionCheck: true });
-  t.mock.method(client.webhooks.subscriptions, 'list', async () => ({ items: [{ id: 'other', webhookUrl: 'https://another-app.example/events' }], nextCursor: null }));
-  t.mock.method(client.webhooks.subscriptions, 'set', async () => { assert.fail('Must not replace another app subscription'); });
-  await assert.rejects(new ComposioSetupProvider(client, 'owner', f.settings).configureWebhook('https://nudge.example'), /existing webhooks were not changed/);
-});
-
-test('managed authorization explicitly requests trigger permissions on both Slack grants and reuses its config', async (t) => {
-  const f = fixture(); t.after(() => f.store.close());
-  const client = new Composio({ apiKey: 'test-key', provider: new VercelProvider(), allowTracking: false, disableVersionCheck: true });
-  let configsCreated = 0;
-  t.mock.method(client.authConfigs, 'create', async (toolkit, options) => {
-    configsCreated++;
-    assert.equal(toolkit, 'slackbot');
-    assert.equal(options.type, 'use_composio_managed_auth');
-    assert.deepEqual(options.credentials, { scopes: SLACK_BOT_SCOPES.join(','), user_scopes: SLACK_USER_SCOPES.join(',') });
-    assert.ok(SLACK_BOT_SCOPES.includes('team:read'));
-    assert.ok(SLACK_BOT_SCOPES.includes('im:history'));
-    assert.ok(SLACK_USER_SCOPES.includes('team:read'));
-    return { id: 'ac_nudge' };
-  });
-  t.mock.method(client, 'create', async (owner, config) => {
-    assert.equal(owner, 'owner');
-    assert.deepEqual(config.authConfigs, { slackbot: 'ac_nudge' });
-    return { authorize: async (_toolkit: string, options: { callbackUrl: string }) => {
-      assert.equal(options.callbackUrl, 'https://nudge.example/setup/callback');
-      return { id: 'ca_new', redirectUrl: 'https://connect.composio.dev/link' };
-    } };
-  });
-  const provider = new ComposioSetupProvider(client, 'owner', f.settings);
-  assert.equal((await provider.authorize('https://nudge.example/setup/callback')).accountId, 'ca_new');
-  await provider.authorize('https://nudge.example/setup/callback');
-  assert.equal(configsCreated, 1);
-});
-
-test('missing-scope trigger failures become safe, actionable reconnection errors', async (t) => {
-  const f = fixture(); t.after(() => f.store.close());
-  const client = new Composio({ apiKey: 'test-key', provider: new VercelProvider(), allowTracking: false, disableVersionCheck: true });
-  t.mock.method(client.triggers, 'create', async () => {
-    throw new Error("400 Failed to get team info: {'error': 'missing_scope', 'needed': 'team:read', 'provided': 'identify'} provider-private-value");
-  });
-  await assert.rejects(new ComposioSetupProvider(client, 'owner', f.settings).enableTrigger('ca_1'), (error: unknown) => {
-    assert.ok(error instanceof SetupError);
-    assert.equal(error.code, 'missing_permissions');
-    assert.match(error.message, /team:read/);
-    assert.match(error.message, /Reconnect Slack/);
-    assert.doesNotMatch(error.message, /provider-private-value/);
-    return true;
-  });
-});
-
-test('permission failures persist across reloads and reconnect replaces only the authorized installation', async (t) => {
-  const f = fixture(); t.after(() => f.store.close());
-  f.provider.enableTrigger = async () => { throw new SetupError('Reconnect Slack to approve team:read.', 'missing_permissions'); };
-  await f.setup.connect('browser', 'https://nudge.example');
-  await assert.rejects(f.setup.complete('browser', f.state()));
-  assert.equal(f.setup.status().reconnectRequired, true);
-  const reloaded = new SlackSetup(f.settings, f.provider, 'owner', (value) => f.activated.push(value), true);
-  assert.equal(reloaded.status().reconnectRequired, true);
-  const user = f.store.user('T1', 'U1', 'D1');
-  f.store.setMemory(user.id, 'Keep this memory');
-  let newCallback = '';
-  f.provider.authorize = async (callback) => { newCallback = callback; return { accountId: 'ca_reconnected', redirectUrl: 'https://connect.composio.dev/approve' }; };
-  await reloaded.reconnect('new-browser', 'https://nudge.example');
-  assert.equal(reloaded.installation()?.connectedAccountId, 'ca_expected'); // Kept until approval succeeds.
-  f.provider.enableTrigger = async () => 'ti_new';
-  await reloaded.complete('new-browser', new URL(newCallback).searchParams.get('state')!);
-  assert.equal(reloaded.installation()?.connectedAccountId, 'ca_reconnected');
-  assert.equal(reloaded.status().ready, true);
-  assert.equal(reloaded.status().reconnectRequired, false);
+  await f.setup.connect('browser', 'https://nudge.example'); await f.setup.complete('browser', f.state());
+  const user = f.store.user('T1', 'U1', 'D1'); f.store.setMemory(user.id, 'Keep this memory'); f.setReady(true);
+  await f.setup.refresh('https://new.example'); assert.equal(f.setup.installation()?.publicUrl, 'https://new.example');
+  Object.assign(f.provider, { authConfigId: 'ac_custom' });
+  assert.equal(f.setup.status().ready, false); assert.equal(f.setup.status().reconnectRequired, true);
+  await f.setup.reconnect('browser', 'https://nudge.example'); await f.setup.complete('browser', f.state());
+  assert.equal(f.setup.installation()?.authConfigId, 'ac_custom'); assert.equal(f.setup.status().ready, true);
   assert.equal(f.store.getUser(user.id).memory, 'Keep this memory');
 });
 
-test('browser script unlocks a private link, fills the public address and starts authorization', async (t) => {
+test('provider failures are safely persisted and refresh can recover', async (t) => {
   const f = fixture(); t.after(() => f.store.close());
-  const app = createApp(undefined, { auth: new SetupAuth('private-link-token'), setup: f.setup });
-  const html = await (await app.request('https://nudge.example/setup')).text();
-  const elements = new Map<string, { hidden: boolean; value: string; checked: boolean; disabled: boolean; textContent: string; className: string; classList: { toggle(): void }; addEventListener(type: string, callback: (...args: any[]) => unknown): void; listeners: Record<string, (...args: any[]) => unknown> }>();
-  for (const match of html.matchAll(/id="([^"]+)"/g)) {
-    const listeners: Record<string, (...args: any[]) => unknown> = {};
-    elements.set(match[1], { hidden: true, value: '', checked: false, disabled: false, textContent: '', className: '', classList: { toggle() {} }, listeners, addEventListener(type, callback) { listeners[type] = callback; } });
-  }
-  let cookie = '';
-  let redirected = '';
-  let privateFragmentRemoved = false;
+  f.provider.authorize = async () => { throw new Error('private-provider-body'); };
+  await assert.rejects(f.setup.connect('browser', 'https://nudge.example'), /Could not finish/);
+  assert.doesNotMatch(JSON.stringify(f.setup.status()), /private-provider-body/);
+  f.provider.authorize = async () => ({ accountId: 'ca_1', redirectUrl: 'https://connect.composio.dev/approve' });
+  await f.setup.connect('browser', 'https://nudge.example'); await f.setup.complete('browser');
+  await f.setup.refresh('https://new.example'); assert.equal(f.setup.status().error, null);
+});
+
+test('obsolete token-format notices are cleared and field mistakes do not persist across visits', async (t) => {
+  const f = fixture(); t.after(() => f.store.close());
+  f.settings.set('slack.setup-error', { message: 'Enter the Slack Signing Secret and Bot User OAuth Token starting with xoxb-.' });
+  assert.equal(f.setup.status().error, null);
+  assert.equal(f.settings.get('slack.setup-error'), undefined);
+  await assert.rejects(f.setup.configureSlackDelivery('bad', 'opaque-token'), /Signing Secret/);
+  assert.equal(f.setup.status().error, null);
+  // Opaque tokens reach the configured verification function, not a prefix validator.
+  await f.setup.configureSlackDelivery('a'.repeat(32), 'xoxe.xoxb-test._=');
+  assert.equal(f.setup.status().ready, true);
+});
+
+test('credential forms enforce admin authentication, CSRF and origin checks and never render secrets', async (t) => {
+  const f = fixture(); t.after(() => f.store.close()); const auth = new SetupAuth('key'); const token = auth.unlock('key')!;
+  const app = createApp(undefined, { auth, setup: f.setup });
+  const secret = 'a'.repeat(32); const bot = 'xoxb-private-bot';
+  const post = (csrf: string, origin?: string, site?: string, cookie = `nudge_setup=${token}`) => app.request('https://nudge.example/setup/slack-delivery', {
+    method: 'POST', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded', ...(origin ? { origin } : {}), ...(site ? { 'sec-fetch-site': site } : {}) },
+    body: new URLSearchParams({ csrf, signingSecret: secret, botToken: bot }),
+  });
+  const csrf = auth.formToken(token)!;
+  assert.equal((await post(csrf, undefined, undefined, '')).status, 403);
+  assert.equal((await post('bad', 'null')).status, 403);
+  assert.equal((await post(csrf, 'https://evil.example')).status, 403);
+  assert.equal((await post(csrf, 'null', 'cross-site')).status, 403);
+  assert.equal((await post(csrf, 'null')).status, 303);
+  assert.equal((await post(csrf)).status, 303);
+  assert.equal(f.setup.status().ready, true);
+  const html = await (await app.request('https://nudge.example/setup', { headers: { cookie: `nudge_setup=${token}` } })).text();
+  assert.match(html, /https:\/\/nudge.example\/webhooks\/slack/);
+  assert.doesNotMatch(html, new RegExp(`${secret}|${bot}|SLACK_TRANSPORT|Enable faster replies|name="appToken"`));
+  assert.doesNotMatch(JSON.stringify(f.store.db.prepare('SELECT * FROM app_settings').all()), new RegExp(`${secret}|${bot}`));
+  await assert.rejects(f.setup.configureSlackDelivery(secret, 'token with spaces'), /Bot User OAuth Token/);
+  await assert.rejects(f.setup.configureSlackDelivery('bad', bot), /Signing Secret/);
+});
+
+test('SSR onboarding uses secure cookies, CSP handoff, clean private links, logout and escaped errors', async (t) => {
+  const f = fixture(); t.after(() => f.store.close()); const auth = new SetupAuth('private-key');
+  const app = createApp(undefined, { auth, setup: f.setup }, new AppConnections(f.store, undefined, 'https://nudge.example'));
+  assert.equal((await app.request('https://nudge.example/setup/api/status')).status, 401);
+  const response = await app.request('https://nudge.example/setup?token=private-key');
+  assert.equal(response.status, 303); assert.equal(response.headers.get('location'), '/setup');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  const cookies = response.headers.get('set-cookie')!; assert.match(cookies, /Secure/); assert.match(cookies, /HttpOnly/); assert.match(cookies, /SameSite=Lax/i);
+  const cookie = cookies.split(';')[0];
+  const page = await app.request('https://nudge.example/setup', { headers: { cookie } });
+  assert.match(page.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
+  const html = await page.text(); const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
+  assert.doesNotMatch(html, /private-key|Your personal apps/);
+  assert.match(html, /<script nonce="/);
+  const post = (path: string, data: Record<string, string>) => app.request(`https://nudge.example/setup/${path}`, {
+    method: 'POST', headers: { cookie, origin: 'https://nudge.example', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf, ...data }),
+  });
+  assert.equal((await post('connect', { publicUrl: 'https://evil.example', consent: 'yes' })).status, 400);
+  const handoff = await post('connect', { publicUrl: 'https://nudge.example', consent: 'yes' }); assert.equal(handoff.status, 200);
+  const handoffHtml = await handoff.text(); let destination = '';
+  runInNewContext(handoffHtml.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1], { window: { location: { replace: (url: string) => { destination = url; } } } });
+  assert.equal(destination, 'https://connect.composio.dev/approve');
+  await app.request(`https://nudge.example/setup/callback?state=${f.state()}&connected_account_id=ca_attacker`, { headers: { cookie } });
+  assert.equal(f.setup.installation()?.connectedAccountId, 'ca_expected');
+  f.settings.set('slack.setup-error', { message: '<img src=x onerror=alert(1)>' });
+  const errorHtml = await (await app.request('https://nudge.example/setup', { headers: { cookie } })).text();
+  assert.match(errorHtml, /&lt;img/); assert.doesNotMatch(errorHtml, /<img|Private connection key/);
+  assert.equal((await post('logout', {})).status, 303);
+  assert.equal((await app.request('https://nudge.example/setup/api/status', { headers: { cookie } })).status, 401);
+});
+
+test('setup errors stay on the installer surface when personal routes are mounted', async (t) => {
+  const f = fixture(); t.after(() => f.store.close()); const auth = new SetupAuth('key'); const token = auth.unlock('key')!;
+  f.provider.authorize = async () => { throw new SetupError('Slack authorization could not start.'); };
+  const app = createApp(undefined, { auth, setup: f.setup }, new AppConnections(f.store, undefined, 'https://nudge.example'));
+  const response = await app.request('https://nudge.example/setup/connect', { method: 'POST', headers: { cookie: `nudge_setup=${token}`, origin: 'https://nudge.example', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: auth.formToken(token)!, consent: 'yes', publicUrl: 'https://nudge.example' }) });
+  assert.equal(response.status, 400); const html = await response.text();
+  assert.match(html, /Slack authorization could not start/); assert.doesNotMatch(html, /Private connection key/);
+});
+
+test('Composio only authorizes the custom Slack app and verifies its account ownership', async (t) => {
+  const client = new Composio({ apiKey: 'test-key', provider: new VercelProvider(), allowTracking: false, disableVersionCheck: true });
+  t.mock.method(client.webhooks.subscriptions, 'set', async () => assert.fail('No Composio delivery subscriptions'));
+  t.mock.method(client.triggers, 'create', async () => assert.fail('No Composio triggers'));
+  t.mock.method(client, 'create', async (_owner, config) => {
+    assert.deepEqual(config.authConfigs, { slackbot: 'ac_custom' });
+    return { authorize: async () => ({ id: 'ca_custom', redirectUrl: 'https://connect.composio.dev/custom' }) };
+  });
+  let accountConfig = 'ac_other';
+  t.mock.method(client.connectedAccounts, 'get', async () => ({ status: 'ACTIVE', isDisabled: false, toolkit: { slug: 'slackbot' }, authConfig: { id: accountConfig } }));
+  const provider = new ComposioSetupProvider(client, 'owner', 'ac_custom');
+  assert.equal((await provider.authorize('https://nudge.example/setup/callback')).accountId, 'ca_custom');
+  assert.equal(await provider.isActive('ca_other'), false); accountConfig = 'ac_custom'; assert.equal(await provider.isActive('ca_custom'), true);
+  await assert.rejects(new ComposioSetupProvider(client, 'owner').authorize('https://nudge.example/setup/callback'), /auth config ID/);
+});
+
+test('Slack credential save stays on page, preserves entries on failure, and clearly confirms success', async (t) => {
+  const f = fixture(); t.after(() => f.store.close()); const auth = new SetupAuth('key'); const token = auth.unlock('key')!;
+  const app = createApp(undefined, { auth, setup: f.setup });
+  const page = await app.request('https://nudge.example/setup', { headers: { cookie: `nudge_setup=${token}` } });
+  // The enhanced form uses fetch: default-src 'none' otherwise blocks saving
+  // before a request ever reaches the server, even when its script is allowed.
+  assert.match(page.headers.get('content-security-policy')!, /(?:^|;\s*)connect-src 'self'(?:;|$)/);
+  const html = await page.text();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1];
-  await runInNewContext(script, {
-    URLSearchParams,
-    document: { getElementById: (id: string) => { assert.ok(elements.has(id), `Unknown element ${id}`); return elements.get(id); } },
-    location: { hash: '#token=private-link-token', protocol: 'https:', origin: 'https://nudge.example', assign: (url: string) => { redirected = url; } },
-    history: { replaceState: () => { privateFragmentRemoved = true; } },
-    fetch: async (path: string, options?: RequestInit) => {
-      const response = await app.request(`https://nudge.example${path}`, {
-        ...options, headers: { ...options?.headers, origin: 'https://nudge.example', cookie },
-      });
-      if (response.headers.has('set-cookie')) cookie = response.headers.get('set-cookie')!.split(';')[0];
-      return response;
+  const fields: Record<string, { value: string; focused: boolean; focus(): void }> = {};
+  for (const id of ['signing-secret', 'bot-token']) fields[id] = { value: '', focused: false, focus() { this.focused = true; } };
+  const feedback = { textContent: '', className: '', hidden: true, focus() {} };
+  const button = { textContent: 'Save Slack connection', disabled: false };
+  let submit!: (event: { preventDefault(): void }) => Promise<void>;
+  const form = { action: 'https://nudge.example/setup/slack-delivery', elements: { namedItem: () => ({ value: 'csrf-test' }) },
+    addEventListener: (_name: string, handler: typeof submit) => { submit = handler; } };
+  let calls = 0; let mode = 'provider-error';
+  runInNewContext(script, {
+    document: { getElementById: (id: string) => ({ 'delivery-form': form, 'delivery-feedback': feedback, 'delivery-submit': button, ...fields })[id] },
+    URLSearchParams, AbortSignal,
+    fetch: async (_url: string, options: RequestInit) => {
+      calls++;
+      assert.equal(new Headers(options.headers).get('accept'), 'application/json');
+      assert.equal(new URLSearchParams(String(options.body)).get('csrf'), 'csrf-test');
+      if (mode === 'offline') throw new Error('offline');
+      if (mode === 'provider-error') return { ok: false, json: async () => ({ error: 'Could not verify bot access.' }) };
+      return { ok: true, json: async () => ({ ok: true }) };
     },
   });
-  assert.equal(privateFragmentRemoved, true);
-  assert.equal(elements.get('dashboard')!.hidden, false);
-  assert.equal(elements.get('unlock')!.hidden, true);
-  assert.equal(elements.get('public-url')!.value, 'https://nudge.example');
-  assert.equal(elements.get('connect-button')!.disabled, false);
-  elements.get('consent')!.checked = true;
-  await elements.get('connect-form')!.listeners.submit({ preventDefault() {} });
-  assert.equal(redirected, 'https://connect.composio.dev/approve');
-  assert.equal(f.setup.status().pending, true);
+  const event = { preventDefault() {} };
+  fields['signing-secret'].value = 'not-a-secret'; fields['bot-token'].value = 'xapp-wrong';
+  await submit(event); assert.equal(calls, 0); assert.equal(fields['signing-secret'].focused, true);
+  fields['signing-secret'].value = 'a'.repeat(32);
+  fields['bot-token'].value = 'token with spaces';
+  await submit(event); assert.equal(calls, 0); assert.match(feedback.textContent, /without spaces/);
+  fields['bot-token'].value = 'xoxb-test';
+  await submit(event); assert.equal(calls, 1); assert.match(feedback.textContent, /Could not verify/);
+  assert.equal(fields['bot-token'].value, 'xoxb-test'); assert.equal(button.disabled, false);
+  mode = 'offline'; await submit(event);
+  assert.match(feedback.textContent, /entries are still here/); assert.equal(fields['bot-token'].value, 'xoxb-test');
+  mode = 'success'; await submit(event);
+  assert.equal(fields['signing-secret'].value, ''); assert.equal(fields['bot-token'].value, '');
+  assert.match(feedback.textContent, /Saved!.*Retry/); assert.equal(button.textContent, 'Saved');
+  // The same protected form can negotiate JSON without bypassing CSRF.
+  const request = (csrf: string) => app.request('https://nudge.example/setup/slack-delivery', {
+    method: 'POST', headers: { cookie: `nudge_setup=${token}`, origin: 'https://nudge.example', accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, signingSecret: 'a'.repeat(32), botToken: 'xoxb-test' }),
+  });
+  const invalid = await request('bad'); assert.equal(invalid.status, 403); assert.match(invalid.headers.get('content-type')!, /application\/json/);
+  const valid = await request(auth.formToken(token)!); assert.equal(valid.status, 200); assert.deepEqual(await valid.json(), { ok: true });
 });

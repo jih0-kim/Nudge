@@ -1,14 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { Settings } from '../core/settings.js';
 import { digest } from './setup-auth.js';
+import { SlackConnectionError } from '../adapters/direct-slack.js';
 
 export interface SlackInstallation {
+  authConfigId?: string;
   userId: string;
   connectedAccountId: string;
-  webhookSecret: string;
   publicUrl: string;
-  subscriptionId: string;
-  triggerId: string;
 }
 
 interface PendingConnection {
@@ -20,10 +19,9 @@ interface PendingConnection {
 }
 
 export interface SlackSetupProvider {
+  readonly authConfigId?: string;
   authorize(callbackUrl: string): Promise<{ accountId: string; redirectUrl: string }>;
   isActive(accountId: string): Promise<boolean>;
-  configureWebhook(publicUrl: string, previous?: SlackInstallation): Promise<{ subscriptionId: string; secret: string }>;
-  enableTrigger(accountId: string): Promise<string>;
 }
 
 export class SetupError extends Error {
@@ -49,6 +47,8 @@ export class SlackSetup {
     private activate: (installation: SlackInstallation) => void,
     private aiConfigured: boolean,
     private defaultPublicUrl?: string,
+    private delivery: () => { ready: boolean; configured: boolean } = () => ({ ready: false, configured: false }),
+    private configureDelivery?: (signingSecret: string, botToken: string) => Promise<void>,
   ) {}
 
   installation() { return this.settings.get<SlackInstallation>('slack.installation'); }
@@ -56,15 +56,26 @@ export class SlackSetup {
   status() {
     const installation = this.installation();
     const pending = this.settings.get<PendingConnection>('slack.pending');
-    const error = this.settings.get<{ message: string; code?: string }>('slack.setup-error');
+    let error = this.settings.get<{ message: string; code?: string }>('slack.setup-error');
+    // Retire the old token-format error; tokens are now verified by Slack.
+    if (error?.message === 'Enter the Slack Signing Secret and Bot User OAuth Token starting with xoxb-.') {
+      this.settings.delete('slack.setup-error');
+      error = undefined;
+    }
+    const appChanged = Boolean(installation && this.provider?.authConfigId
+      && installation.authConfigId !== this.provider.authConfigId);
+    const delivery = this.delivery();
     return {
       composioConfigured: Boolean(this.provider), aiConfigured: this.aiConfigured,
-      connected: Boolean(installation?.connectedAccountId),
-      ready: Boolean(this.provider && installation?.triggerId && installation?.webhookSecret),
+      connected: Boolean(installation?.connectedAccountId || delivery.ready),
+      ready: delivery.ready && !appChanged,
+      deliveryConfigured: delivery.configured,
+      canConfigureDelivery: Boolean(this.configureDelivery),
       pending: Boolean(pending && pending.expiresAt > Date.now()),
       publicUrl: installation?.publicUrl || this.defaultPublicUrl || '',
       busy: this.busy, error: error?.message || null,
-      reconnectRequired: error?.code === 'missing_permissions',
+      reconnectRequired: appChanged || error?.code === 'missing_permissions',
+      appChanged,
     };
   }
 
@@ -119,16 +130,22 @@ export class SlackSetup {
     });
   }
 
+  async configureSlackDelivery(signingSecret: string, botToken: string) {
+    // Field mistakes belong to this submission, not persistent installation state.
+    if (!/^[a-f0-9]{32,64}$/i.test(signingSecret)) throw new SetupError('Signing Secret: copy the value from Slack → Basic Information → App Credentials → Signing Secret. This field does not take a token.');
+    if (!botToken || botToken.length > 4096 || /\s/.test(botToken)) throw new SetupError('Bot User OAuth Token: paste the complete value from Slack → OAuth & Permissions, without spaces.');
+    return this.exclusive(async () => {
+      if (!this.configureDelivery) throw new SetupError('Slack delivery setup is not available on this server.');
+      try { await this.configureDelivery(signingSecret, botToken); }
+      catch (error) { throw new SetupError(error instanceof SlackConnectionError ? error.message : 'Could not verify bot access or save Slack delivery. Your entries are still here; try again.'); }
+    });
+  }
+
   private async install(accountId: string, publicUrl: string) {
     const provider = this.requireProvider();
-    const webhook = await provider.configureWebhook(publicUrl, this.installation());
-    // Save partial progress so a failed trigger setup can be retried without losing the secret.
     const installation: SlackInstallation = {
-      userId: this.userId, connectedAccountId: accountId, publicUrl,
-      webhookSecret: webhook.secret, subscriptionId: webhook.subscriptionId, triggerId: '',
+      authConfigId: provider.authConfigId, userId: this.userId, connectedAccountId: accountId, publicUrl,
     };
-    this.settings.set('slack.installation', installation);
-    installation.triggerId = await provider.enableTrigger(accountId);
     this.settings.set('slack.installation', installation);
     this.activate(installation); // Enable the webhook and worker without restarting the app.
   }

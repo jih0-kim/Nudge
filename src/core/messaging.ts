@@ -5,5 +5,6 @@ export interface MessageTarget {
 }
 
 export interface MessageSender {
-  send(target: MessageTarget, text: string, deliveryId: number): Promise<void>;
+  start?(target: MessageTarget, deliveryId: number): Promise<string>;
+  send(target: MessageTarget, text: string, deliveryId: number, messageId?: string): Promise<void>;
 }

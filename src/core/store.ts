@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type User = { id: number; team_id: string; slack_id: string; channel_id: string; timezone: string; memory: string };
-export type Job = { id: number; user_id: number; text: string; reply: string | null; attempts: number; kind: string };
+export type Job = { id: number; user_id: number; text: string; reply: string | null; attempts: number; kind: string; message_id: string | null };
 
 export class Store {
   readonly db: DatabaseSync;
@@ -44,6 +44,8 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, available_at);
     `);
+    const columns = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[];
+    if (!columns.some((column) => column.name === 'message_id')) this.db.exec('ALTER TABLE jobs ADD COLUMN message_id TEXT');
   }
 
   user(team: string, slack: string, channel: string): User {
@@ -115,7 +117,7 @@ export class Store {
   }
 
   enqueue(eventId: string, user: number, text: string, now = Date.now()) {
-    this.db.prepare("INSERT OR IGNORE INTO jobs(event_id, user_id, kind, text, available_at) VALUES (?, ?, 'message', ?, ?)").run(eventId, user, text, now);
+    return this.db.prepare("INSERT OR IGNORE INTO jobs(event_id, user_id, kind, text, available_at) VALUES (?, ?, 'message', ?, ?)").run(eventId, user, text, now).changes > 0;
   }
 
   queueReminders(now = Date.now()) {
@@ -129,14 +131,22 @@ export class Store {
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
-  claim(now = Date.now()): Job | undefined {
+  claim(now = Date.now(), excludedUsers: number[] = []): Job | undefined {
     return this.db.prepare(`UPDATE jobs SET status = 'processing', attempts = attempts + 1, available_at = ?
-      WHERE id = (SELECT id FROM jobs WHERE (status = 'pending' OR status = 'processing')
-        AND available_at <= ? ORDER BY id LIMIT 1) RETURNING *`).get(now + 120_000, now) as Job | undefined;
+      WHERE id = (SELECT candidate.id FROM jobs candidate WHERE candidate.status IN ('pending', 'processing')
+        AND candidate.available_at <= ?
+        ${excludedUsers.length ? `AND candidate.user_id NOT IN (${excludedUsers.map(() => '?').join(',')})` : ''}
+        AND NOT EXISTS (SELECT 1 FROM jobs earlier WHERE earlier.user_id = candidate.user_id
+          AND earlier.id < candidate.id AND earlier.status IN ('pending', 'processing'))
+        ORDER BY candidate.id LIMIT 1) RETURNING *`).get(now + 120_000, now, ...excludedUsers) as Job | undefined;
   }
 
   saveReply(id: number, reply: string) {
     this.db.prepare('UPDATE jobs SET reply = ? WHERE id = ?').run(reply, id);
+  }
+
+  saveMessageId(id: number, messageId: string) {
+    this.db.prepare('UPDATE jobs SET message_id = ? WHERE id = ?').run(messageId, id);
   }
 
   finish(job: Job) {

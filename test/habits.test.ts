@@ -61,6 +61,70 @@ test('worker retries saved replies without running the coach again', async (t) =
   assert.deepEqual({ ...job }, { status: 'done', text: '', reply: null });
 });
 
+test('short greeting asks one habit question instead of dumping help', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1');
+  const greeting = await replyToUser(store, user, 'hi');
+  assert.ok(greeting.length < 350);
+  assert.match(greeting, /one small habit/);
+  assert.match(greeting, /\n\n/);
+  assert.doesNotMatch(greeting, /SQLite|cancel 12/);
+  assert.match(await replyToUser(store, user, 'help'), /reminders/);
+});
+
+test('worker persists thinking message and updates it on delivery retries without rerunning the coach', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1'); store.enqueue('E1', user.id, 'hi');
+  let starts = 0; let replies = 0; let sends = 0;
+  const tick = createWorker(store, {
+    start: async () => { starts++; return '123.456'; },
+    send: async (_target, text, _job, messageId) => {
+      assert.equal(messageId, '123.456'); assert.equal(text, 'Hello!');
+      if (++sends === 1) throw new Error('temporary failure');
+    },
+  }, async () => {
+    assert.equal(starts, 1);
+    assert.equal(store.db.prepare('SELECT message_id FROM jobs').get()!.message_id, '123.456');
+    replies++; return 'Hello!';
+  });
+  await tick();
+  store.db.prepare("UPDATE jobs SET available_at = 0 WHERE status = 'pending'").run();
+  await tick();
+  assert.equal(starts, 1); assert.equal(replies, 1); assert.equal(sends, 2);
+});
+
+test('thinking indicator failure does not stop replies and reminders have no thinking indicator', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1'); store.enqueue('E1', user.id, 'hi');
+  let starts = 0; let sends = 0;
+  const tick = createWorker(store, {
+    start: async () => { starts++; throw new Error('unsupported'); },
+    send: async () => { sends++; },
+  }, async () => 'Hello!');
+  await tick();
+  const past = Date.now() - 10_000;
+  store.schedule(user.id, 'Read', new Date(past + 1000).toISOString(), past);
+  await tick();
+  assert.equal(starts, 1); assert.equal(sends, 2);
+});
+
+test('AI failures produce an honest error and safe diagnostics rather than canned coaching', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1'); store.enqueue('E1', user.id, 'who are you?');
+  const logs: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args); });
+  let response = '';
+  const tick = createWorker(store, { send: async (_target, text) => { response = text; } }, async () => {
+    throw Object.assign(new Error('private-provider-body-and-api-key'), { name: 'AI_APICallError', statusCode: 400 });
+  });
+  await tick();
+  assert.match(response, /server problem, not your message/);
+  assert.doesNotMatch(response, /private-provider/);
+  assert.match(JSON.stringify(logs), /AI_APICallError/);
+  assert.match(JSON.stringify(logs), /400/);
+  assert.doesNotMatch(JSON.stringify(logs), /private-provider/);
+});
+
 test('due reminders and memory survive restart and are queued once', async () => {
   const directory = mkdtempSync('/tmp/opencode/nudge-test-');
   const path = join(directory, 'test.sqlite');
@@ -104,17 +168,17 @@ test('natural-language coach executes memory tools for only the requesting user'
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    assert.equal(request.url, 'https://api.openai.com/v1/chat/completions');
-    const body = await request.json() as { messages: { role: string }[]; tools: { function: { parameters: object } }[] };
+    assert.equal(request.url, 'https://api.openai.com/v1/responses');
+    const body = await request.json() as { input: { type: string }[]; tools: { name: string; parameters: object }[] };
     assert.ok(body.tools.length > 0);
     calls++;
-    if (calls === 2) assert.ok(body.messages.some((message) => message.role === 'tool'));
+    if (calls === 2) assert.ok(body.input.some((item) => item.type === 'function_call_output'));
     return Response.json({
-      id: `completion-${calls}`, object: 'chat.completion', created: 1, model: 'gpt-4o-mini',
-      choices: [{ index: 0, finish_reason: calls === 1 ? 'tool_calls' : 'stop', message: calls === 1
-        ? { role: 'assistant', content: null, tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'updateMemory', arguments: JSON.stringify({ markdown: '# Memory\n- Likes reading' }) } }] }
-        : { role: 'assistant', content: 'I’ll remember that you like reading.' } }],
-      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+      id: `response-${calls}`, object: 'response', created_at: 1, model: 'gpt-4o-mini', status: 'completed',
+      output: calls === 1
+        ? [{ id: 'fc-1', type: 'function_call', call_id: 'call-1', name: 'updateMemory', arguments: JSON.stringify({ markdown: '# Memory\n- Likes reading' }) }]
+        : [{ id: 'msg-1', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'I’ll remember that you like reading.', annotations: [] }] }],
+      usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
     });
   });
   assert.match(await replyToUser(store, alice, 'I like reading. Please save that preference.'), /remember/);

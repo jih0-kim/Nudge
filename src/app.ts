@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
-import { composioRoutes, type ComposioWebhookSource } from './surfaces/composio.js';
 import { setupRoutes, type SetupDependencies } from './surfaces/setup.js';
+import { appsRoutes } from './surfaces/apps.js';
+import type { AppConnections } from './services/app-connections.js';
+import { slackRoutes, type DirectSlackWebhook } from './surfaces/slack.js';
 
-export function createApp(composio?: ComposioWebhookSource, setup?: SetupDependencies) {
+export function createApp(slack?: DirectSlackWebhook, setup?: SetupDependencies, connections?: AppConnections) {
   const app = new Hono();
 
   app.use('*', async (c, next) => {
@@ -20,8 +22,19 @@ export function createApp(composio?: ComposioWebhookSource, setup?: SetupDepende
 
   app.get('/health', (c) => c.json({ ok: true }));
 
-  if (composio) app.route('/webhooks', composioRoutes(composio));
-  if (setup) app.route('/setup', setupRoutes(setup));
+  if (slack) app.route('/webhooks', slackRoutes(slack));
+  // Keep each surface's error handler local. Hono route() otherwise copies the
+  // child onError handler to the parent and can render personal apps for setup errors.
+  if (setup) {
+    const installer = new Hono().route('/setup', setupRoutes(setup));
+    app.all('/setup', (c) => installer.fetch(c.req.raw));
+    app.all('/setup/*', (c) => installer.fetch(c.req.raw));
+  }
+  if (connections) {
+    const personal = new Hono().route('/apps', appsRoutes(connections));
+    app.all('/apps', (c) => personal.fetch(c.req.raw));
+    app.all('/apps/*', (c) => personal.fetch(c.req.raw));
+  }
 
   app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
