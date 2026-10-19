@@ -1,6 +1,6 @@
 // Watcher: turns Slack reactions and thread replies into events. SPEC.md section 2, role 1.
 import { generateReply } from "../adapters/llm.js";
-import { getMessage, getReplies, slackTsToIso, type SlackReaction } from "../adapters/slack.js";
+import { getMessage, getReplies, slackTsToIso, type SlackMessage, type SlackReaction } from "../adapters/slack.js";
 import { log } from "../core/log.js";
 import { isStale, questStatuses } from "../core/quests.js";
 import type { Event, QuestAccepted, QuestOption, QuestProposed } from "../core/types.js";
@@ -8,6 +8,7 @@ import type { RunContext } from "./context.js";
 
 const REACTION_TO_INDEX: Record<string, number> = { one: 0, two: 1, three: 2 };
 const PICK_REPLY = /^\s*([123])\s*$/;
+const DONE_REACTIONS = ["white_check_mark", "heavy_check_mark", "ballot_box_with_check"];
 
 export async function watch(ctx: RunContext): Promise<Event[]> {
   const channel = ctx.runtime.slack_channel;
@@ -23,10 +24,10 @@ export async function watch(ctx: RunContext): Promise<Event[]> {
 
     // Our own posts carry bot_id (sent through the Composio app); the user's replies do not.
     const replies = (await getReplies(channel, ts)).filter((r) => !r.bot_id && r.text?.trim());
+    const message = await getMessage(channel, ts);
     let accepted = q.accepted;
 
     if (!accepted) {
-      const message = await getMessage(channel, ts);
       const byReaction = pickFromReactions(message?.reactions);
       const byReply = replies.map((r) => PICK_REPLY.exec(r.text!)).find(Boolean);
       const index = byReaction ?? (byReply ? Number(byReply[1]) - 1 : undefined);
@@ -38,33 +39,46 @@ export async function watch(ctx: RunContext): Promise<Event[]> {
       }
     }
 
-    const summaries = replies.filter((r) => !PICK_REPLY.test(r.text!));
-    for (const reply of summaries) {
-      const option = q.proposed.options.find((o) => o.id === accepted?.option) ?? q.proposed.options[0];
-      if (!(await looksLikeEvidence(reply.text!, option.what))) {
-        log("Watcher", `${q.proposed.quest_id} reply "${reply.text}" does not look like a summary, ignored`);
-        continue;
-      }
-      if (!accepted) {
-        // Doing the quest counts as accepting it.
-        accepted = acceptedEvent(q.proposed, option, slackTsToIso(reply.ts));
-        found.push(accepted);
-      }
-      found.push({
-        ts: slackTsToIso(reply.ts),
-        type: "quest_completed",
-        quest_id: q.proposed.quest_id,
-        habit: q.proposed.habit,
-        evidence: { kind: "slack_thread", text: reply.text },
-        client: "slack",
-      });
-      log("Watcher", `${q.proposed.quest_id} completed: "${reply.text}"`);
-      break;
+    const option = q.proposed.options.find((o) => o.id === accepted?.option) ?? q.proposed.options[0];
+    const evidence = await findEvidence(q.proposed.quest_id, replies, message?.reactions, option.what, ctx.now);
+    if (!evidence) continue;
+    if (!accepted) {
+      // Doing the quest counts as accepting it.
+      accepted = acceptedEvent(q.proposed, option, evidence.ts);
+      found.push(accepted);
     }
+    found.push({
+      ts: evidence.ts,
+      type: "quest_completed",
+      quest_id: q.proposed.quest_id,
+      habit: q.proposed.habit,
+      evidence: { kind: "slack_thread", text: evidence.text },
+      client: "slack",
+    });
+    log("Watcher", `${q.proposed.quest_id} completed: "${evidence.text}"`);
   }
 
   if (found.length === 0) log("Watcher", "no new reactions or summaries");
   return found;
+}
+
+/**
+ * A one-line summary in the thread, else a ✅ on the quest message. The ✅ path exists because Composio's default
+ * Slackbot has its Messages tab off, so users cannot reply in the bot DM.
+ */
+async function findEvidence(
+  questId: string,
+  replies: SlackMessage[],
+  reactions: SlackReaction[] | undefined,
+  quest: string,
+  now: Date,
+): Promise<{ ts: string; text: string } | undefined> {
+  for (const reply of replies.filter((r) => !PICK_REPLY.test(r.text!))) {
+    if (await looksLikeEvidence(reply.text!, quest)) return { ts: slackTsToIso(reply.ts), text: reply.text! };
+    log("Watcher", `${questId} reply "${reply.text}" does not look like a summary, ignored`);
+  }
+  if (reactions?.some((r) => DONE_REACTIONS.includes(r.name))) return { ts: now.toISOString(), text: "reacted ✅" };
+  return undefined;
 }
 
 function pickFromReactions(reactions: SlackReaction[] | undefined): number | undefined {

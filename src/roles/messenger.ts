@@ -35,7 +35,7 @@ export function formatQuest(
     rest.length
       ? `React ${NUMBERS.slice(0, options.length).join(" ")} on this message to pick (other options in thread).`
       : "React 1️⃣ on this message to accept.",
-    "When done, reply in this thread with a one-line summary.",
+    "When done, react ✅ on this message.",
   ]
     .filter((l, i, all) => l !== "" || all[i - 1] !== "")
     .join("\n");
