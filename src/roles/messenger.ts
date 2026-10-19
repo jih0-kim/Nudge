@@ -34,7 +34,7 @@ export function formatQuest(
     rest.length
       ? `React ${NUMBERS.slice(0, options.length).join(" ")} on this message to pick (other options in thread).`
       : "React 1️⃣ on this message to accept.",
-    "When done, react ✅ on this message.",
+    "When done, react ✅ on this message. Not feeling it? React ❌ and I'll suggest something else.",
     "",
     `_${statusLine(state, ctx.config)}_`,
   ]

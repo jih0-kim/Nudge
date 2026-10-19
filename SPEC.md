@@ -63,6 +63,7 @@ type Event =
       options: QuestOption[]; slot: string; duration_min: number; slack_ts?: string }
   | { ts: string; type: "quest_accepted"; quest_id: string; option: string;
       declined: string[]; client: string }
+  | { ts: string; type: "quest_skipped"; quest_id: string; client: string }   // ❌ on the quest
   | { ts: string; type: "calendar_event_created"; quest_id: string; event_id: string }
   | { ts: string; type: "quest_completed"; quest_id: string; habit: string;
       evidence: { kind: "slack_thread" | "github" | "mcp"; text?: string; url?: string };

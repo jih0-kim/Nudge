@@ -56,12 +56,13 @@ function alreadyDone(events: Event[], habitId: string): { what: string[]; urls: 
   return { what: what.slice(-10), urls };
 }
 
-/** Options the user skipped lately, so the LLM can steer away from them. */
+/** Options the user passed on lately (declined picks, skipped quests), so the LLM can steer away from them. */
 function recentlyDeclined(events: Event[], habitId: string): string[] {
   const out: string[] = [];
   for (const q of questStatuses(events).values()) {
-    if (q.proposed.habit !== habitId || !q.accepted) continue;
-    for (const id of q.accepted.declined) {
+    if (q.proposed.habit !== habitId) continue;
+    const passed = q.skipped && !q.completed ? q.proposed.options.map((o) => o.id) : (q.accepted?.declined ?? []);
+    for (const id of passed) {
       const o = q.proposed.options.find((x) => x.id === id);
       if (o) out.push(o.what);
     }
