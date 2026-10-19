@@ -117,7 +117,7 @@ export class Store {
   }
 
   enqueue(eventId: string, user: number, text: string, now = Date.now()) {
-    this.db.prepare("INSERT OR IGNORE INTO jobs(event_id, user_id, kind, text, available_at) VALUES (?, ?, 'message', ?, ?)").run(eventId, user, text, now);
+    return this.db.prepare("INSERT OR IGNORE INTO jobs(event_id, user_id, kind, text, available_at) VALUES (?, ?, 'message', ?, ?)").run(eventId, user, text, now).changes > 0;
   }
 
   queueReminders(now = Date.now()) {
@@ -131,10 +131,14 @@ export class Store {
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
-  claim(now = Date.now()): Job | undefined {
+  claim(now = Date.now(), excludedUsers: number[] = []): Job | undefined {
     return this.db.prepare(`UPDATE jobs SET status = 'processing', attempts = attempts + 1, available_at = ?
-      WHERE id = (SELECT id FROM jobs WHERE (status = 'pending' OR status = 'processing')
-        AND available_at <= ? ORDER BY id LIMIT 1) RETURNING *`).get(now + 120_000, now) as Job | undefined;
+      WHERE id = (SELECT candidate.id FROM jobs candidate WHERE candidate.status IN ('pending', 'processing')
+        AND candidate.available_at <= ?
+        ${excludedUsers.length ? `AND candidate.user_id NOT IN (${excludedUsers.map(() => '?').join(',')})` : ''}
+        AND NOT EXISTS (SELECT 1 FROM jobs earlier WHERE earlier.user_id = candidate.user_id
+          AND earlier.id < candidate.id AND earlier.status IN ('pending', 'processing'))
+        ORDER BY candidate.id LIMIT 1) RETURNING *`).get(now + 120_000, now, ...excludedUsers) as Job | undefined;
   }
 
   saveReply(id: number, reply: string) {

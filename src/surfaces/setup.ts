@@ -30,12 +30,13 @@ export function setupRoutes({ auth, setup }: SetupDependencies) {
     const url = new URL(c.req.url);
     const publicUrl = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
       ? state?.publicUrl || '' : `https://${url.host}`;
-    c.header('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self' https://connect.composio.dev https://backend.composio.dev https://slack.com https://*.slack.com; frame-ancestors 'none'`);
+    c.header('Content-Security-Policy', `default-src 'none'; connect-src 'self'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self' https://connect.composio.dev https://backend.composio.dev https://slack.com https://*.slack.com; frame-ancestors 'none'`);
     return c.html(setupPage({ nonce, status: state, formToken: auth.formToken(cookie), publicUrl, error }), status);
   };
+  const wantsJson = (c: Context) => c.req.header('accept')?.includes('application/json');
   const fail = (c: Context, error: string, status: 400 | 401 | 403 | 500) =>
-    isForm(c) ? render(c, error, status) : c.json({ error }, status);
-  const done = (c: Context) => isForm(c) ? c.redirect('/setup', 303) : c.json({ ok: true });
+    isForm(c) && !wantsJson(c) ? render(c, error, status) : c.json({ error }, status);
+  const done = (c: Context) => isForm(c) && !wantsJson(c) ? c.redirect('/setup', 303) : c.json({ ok: true });
   const login = (c: Context, token: string) => {
     const session = auth.unlock(token);
     if (!session) return false;
@@ -49,7 +50,7 @@ export function setupRoutes({ auth, setup }: SetupDependencies) {
     });
     return true;
   };
-  routes.use('*', bodyLimit({ maxSize: 4096, onError: (c) => c.json({ error: 'Request too large' }, 413) }));
+  routes.use('*', bodyLimit({ maxSize: 16_384, onError: (c) => c.json({ error: 'Request too large' }, 413) }));
   routes.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     // no-referrer makes browser form POSTs use Origin: null. Keep same-origin
@@ -135,12 +136,12 @@ export function setupRoutes({ auth, setup }: SetupDependencies) {
     await setup.refresh(data.publicUrl);
     return done(c);
   });
-  routes.post('/event-credentials', async (c) => {
+  routes.post('/slack-delivery', async (c) => {
     const data = await body(c);
-    if (typeof data?.signingSecret !== 'string' || typeof data?.appToken !== 'string') {
-      return fail(c, 'Enter both Slack event credentials.', 400);
+    if (typeof data?.signingSecret !== 'string' || typeof data?.botToken !== 'string') {
+      return fail(c, 'Enter the Slack Signing Secret and Bot User OAuth Token.', 400);
     }
-    await setup.configureEventCredentials(data.signingSecret.trim(), data.appToken.trim());
+    await setup.configureSlackDelivery(data.signingSecret.trim(), data.botToken.trim());
     return done(c);
   });
   routes.post('/complete', async (c) => {

@@ -1,29 +1,80 @@
-import { getComposioClient } from '../adapters/composio.js';
-import { ComposioSlackSender, createComposioVerifier, createSlackSession, type SlackConnection } from '../adapters/composio-slack.js';
+import { DirectSlackSender } from '../adapters/direct-slack.js';
 import { createWorker } from '../core/worker.js';
-import type { Store } from '../core/store.js';
-import type { ComposioWebhookDependencies } from '../surfaces/composio.js';
-import type { AppConnections } from './app-connections.js';
 import { replyToUser } from '../core/coach.js';
+import type { Store } from '../core/store.js';
+import type { DirectSlackWebhook } from '../surfaces/slack.js';
+import type { SlackInstallation } from './slack-setup.js';
+import type { AppConnections } from './app-connections.js';
 
-/** Swap configured dependencies after onboarding; no server restart required. */
+export interface SlackConfig {
+  signingSecret?: string;
+  botToken?: string;
+  appId?: string;
+}
+
+/** One Slack transport and one durable worker. Composio is not on the chat path. */
 export class SlackRuntime {
-  webhook?: ComposioWebhookDependencies;
-  private worker?: () => Promise<void>;
+  readonly webhook: DirectSlackWebhook;
+  private sender?: DirectSlackSender;
+  private worker: () => Promise<void>;
+  private workspaceId?: string;
+  private generation = 0;
+  private installation?: SlackInstallation;
 
-  constructor(private store: Store, private client: ReturnType<typeof getComposioClient>, private connections?: AppConnections) {}
-
-  activate(config: SlackConnection) {
-    const sender = new ComposioSlackSender(() => createSlackSession(this.client, config));
-    this.worker = createWorker(this.store, sender, (store, user, input) => replyToUser(store, user, input, this.connections));
+  constructor(store: Store, private config: SlackConfig, connections?: AppConnections) {
     this.webhook = {
-      store: this.store, connectedAccountId: config.connectedAccountId,
-      verify: createComposioVerifier(this.client, config.webhookSecret, config.connectedAccountId),
+      store, signingSecret: config.signingSecret || '', appId: config.appId,
+      workspaceId: () => this.workspaceId,
+      connectionId: () => this.installation?.connectedAccountId || `direct:${this.workspaceId}`,
       onAccepted: () => { void this.tick().catch(() => console.warn('Slack worker wake-up failed')); },
     };
-    // Resolve account/workspace before the next DM, without delaying setup HTTP.
-    void sender.warmup().catch(() => console.warn('Slack transport warm-up failed; will retry on demand'));
+    this.worker = createWorker(store, {
+      start: async (target, id) => {
+        if (!this.sender) throw new Error('Slack is not configured');
+        return this.sender.start(target, id);
+      },
+      send: async (target, text, id, messageId) => {
+        if (!this.sender) throw new Error('Slack is not configured');
+        await this.sender.send(target, text, id, messageId);
+      },
+    }, (store, user, input) => replyToUser(store, user, input, connections));
   }
 
-  async tick() { await this.worker?.(); }
+  status() {
+    return { ready: Boolean(this.sender), configured: Boolean(this.config.signingSecret && this.config.botToken) };
+  }
+
+  async activate(installation?: SlackInstallation) {
+    const generation = ++this.generation;
+    this.installation = installation;
+    if (!this.status().configured) return;
+    try {
+      const sender = new DirectSlackSender(async () => this.config.botToken!);
+      const workspaceId = await sender.warmup();
+      if (generation !== this.generation) return;
+      this.workspaceId = workspaceId;
+      this.sender = sender;
+      console.log('Slack transport ready');
+    } catch {
+      console.warn('Slack transport unavailable. Check bot credentials in the private setup page.');
+    }
+  }
+
+  async configure(config: SlackConfig, persist: () => void) {
+    if (!/^[a-f0-9]{32,64}$/i.test(config.signingSecret || '') || !config.botToken || config.botToken.length > 4096 || /\s/.test(config.botToken)) {
+      throw new Error('Slack signing secret and bot token are required');
+    }
+    const sender = new DirectSlackSender(async () => config.botToken!);
+    const workspaceId = await sender.warmup();
+    if (this.workspaceId && this.workspaceId !== workspaceId) throw new Error('Slack workspace mismatch');
+    persist(); // Keep the working connection if verification or storage fails.
+    this.generation++;
+    this.config = config;
+    this.webhook.signingSecret = config.signingSecret!;
+    this.webhook.appId = config.appId;
+    this.workspaceId = workspaceId;
+    this.sender = sender;
+  }
+
+  async tick() { if (this.sender) await this.worker(); }
 }

@@ -14,7 +14,7 @@ npm run dev
 
 The server defaults to `http://localhost:3000`. Set `PORT` in `.env` to change it.
 
-Set your Composio project API key in `.env`, then open the **private installer link** printed at startup using your public HTTPS hostname. Click **Connect Slack** and approve the workspace. Nudge saves the connection and configures message delivery automatically—no Slack CLI commands, copied account IDs, or restart. See [browser setup](docs/SETUP.md).
+Open the **private installer link** printed at startup using your public HTTPS hostname. Connect your workspace through Composio, save the Slack Signing Secret and bot token in the protected form, then point Slack events to `/webhooks/slack`. Chat goes directly between Slack and Nudge; Composio handles authorization and connected apps. See [browser setup](docs/SETUP.md).
 
 ## Commands
 
@@ -32,7 +32,7 @@ Both server commands load `.env`; copy `.env.example` before running them.
 - `GET /` — opens the setup page
 - `GET /setup` — protected installer UI (private link unlocks admin actions)
 - `GET /health` — `{ "ok": true }`
-- `POST /webhooks/composio` — signed Composio trigger events (enabled after Slackbot setup)
+- `POST /webhooks/slack` — signed Slack events; durable queue and immediate worker wake-up
 
 Unknown routes and unexpected errors return JSON responses. Request paths are logged without query strings, so OAuth state is not logged.
 
@@ -50,8 +50,8 @@ src/
     worker.ts               # Background job processing and delivery retries
   adapters/
     composio.ts             # Shared Composio client and general integrations
-    composio-slack.ts       # Account-bound Slackbot sessions and webhook verification
-    composio-setup.ts       # Managed OAuth, trigger and webhook provisioning
+    direct-slack.ts         # Direct Slack message posting and editing
+    composio-setup.ts       # Custom Slack app OAuth only
     llm.ts                  # OpenAI model adapter
     parallel.ts             # Web search adapter
   services/
@@ -60,7 +60,7 @@ src/
     setup-auth.ts           # Private installer access and sessions
     slack-runtime.ts        # Activate installed transport without restarting
   surfaces/
-    composio.ts             # HTTP webhook handling
+    slack.ts                # Signed Slack webhook handling
     setup.ts                # Installer HTTP routes and security boundaries
     setup-page.ts           # Browser onboarding UI
 ```
@@ -69,7 +69,7 @@ The habit worker depends on a message-sender interface, not the Composio SDK. Sl
 
 ## Slack coach and SQLite
 
-See **[browser setup](docs/SETUP.md)** for Composio authorization and installation. No raw Slack tokens, signing secrets, or account IDs need to be copied into `.env`. SQLite initializes automatically at `data/nudge.sqlite` and stores both installation state and per-user data in separate tables. Keep this directory on persistent disk.
+See **[browser setup](docs/SETUP.md)** for authorization and installation. The protected setup form saves Slack delivery credentials in a private server file, not SQLite or model context. SQLite initializes automatically at `data/nudge.sqlite` and stores installation references and per-user data in separate tables. Keep this directory on private persistent disk.
 
 DM the bot `help`, `remember <preference>`, `memory`, `timezone <IANA zone>`, `remind <ISO timestamp> <message>`, `reminders`, `cancel <id>`, `done <activity>`, or `progress`. With `OPENAI_API_KEY` configured, you can also chat naturally; the coach uses user-scoped tools to save memories, set reminders, and log activity.
 
@@ -90,7 +90,8 @@ Add the values from `.env.example` to your local `.env`. Integrations initialize
 | Integration | Required environment variables |
 | --- | --- |
 | Vercel AI SDK (official OpenAI provider) | `OPENAI_API_KEY`; optional `OPENAI_MODEL` (defaults to `gpt-4o-mini`) |
-| Composio Slackbot | `COMPOSIO_API_KEY`; optional `COMPOSIO_USER_ID` (defaults to `local-user`, saved with the installation) |
+| Slack chat | Signing Secret and bot token via private setup form, or `SLACK_SIGNING_SECRET` and `SLACK_BOT_TOKEN` |
+| Composio Slack authorization | `COMPOSIO_API_KEY`, `COMPOSIO_SLACK_AUTH_CONFIG_ID`; optional `COMPOSIO_USER_ID` |
 | Browser setup | Optional `APP_BASE_URL` and `NUDGE_SETUP_TOKEN`; otherwise use the detected public address and generated private key |
 | Parallel Search | `PARALLEL_API_KEY` |
 

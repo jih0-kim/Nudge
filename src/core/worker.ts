@@ -3,14 +3,16 @@ import type { MessageSender } from './messaging.js';
 import { replyToUser } from './coach.js';
 
 export function createWorker(store: Store, sender: MessageSender, reply = replyToUser) {
-  let busy = false;
+  const activeUsers = new Set<number>();
   return async function tick() {
-    if (busy) return;
-    busy = true;
+    // Different people must not wait behind another person's model call.
+    // Keep each person's turns ordered and bound total provider concurrency.
+    if (activeUsers.size >= 4) return;
+    store.queueReminders();
+    const job = store.claim(Date.now(), [...activeUsers]);
+    if (!job) return;
+    activeUsers.add(job.user_id);
     try {
-      store.queueReminders();
-      const job = store.claim();
-      if (!job) return;
       const startedAt = Date.now();
       const timing = (stage: string) => console.log('Slack job timing', JSON.stringify({ jobId: job.id, stage, elapsedMs: Date.now() - startedAt }));
       try {
@@ -45,6 +47,6 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
         store.retry(job);
         console.error(`Slack delivery failed for job ${job.id}, attempt ${job.attempts}`);
       }
-    } finally { busy = false; }
+    } finally { activeUsers.delete(job.user_id); }
   };
 }

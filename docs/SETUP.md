@@ -1,63 +1,41 @@
 # Connect Nudge to Slack
 
-## For the installer
+There is one chat path: **Slack → Nudge → Slack**. Composio handles OAuth and personal app integrations, not message delivery. SQLite stores isolated memory and durable jobs.
 
-1. Open the **private installer link** printed when Nudge starts. Treat this link like an admin password; it unlocks setup, not user memory.
-2. Open it at the app's **public HTTPS address** (for example, your deployment or development tunnel), keeping `/setup?token=…` from the private link. The server signs you in and immediately redirects to `/setup` without the key. The address field fills itself in when opened over HTTPS. Older fragment-based links still work with JavaScript enabled.
-3. Review the message-delivery permission checkbox and click **Connect Slack**.
-4. Choose your workspace and approve Composio's Slackbot connection. A workspace admin may need to approve installation.
-5. Return to Nudge. It saves the exact authorized connection, configures the webhook, enables the DM trigger, and starts the worker automatically—no copied IDs, secrets, or restart.
-6. If authorization does not redirect back, reopen the same setup page in the same browser and click **I've approved Slack—finish setup**.
-7. Once the page says **Your coach is ready**, open Slack, find the installed bot under **Apps**, and send `hi`.
+## One-time installer setup
 
-Only the installer does this. Other workspace members simply DM the bot; no Nudge signup or Composio account is needed.
+1. Configure the server’s `.env` using `.env.example`. Set `COMPOSIO_API_KEY`, `COMPOSIO_SLACK_AUTH_CONFIG_ID`, and `OPENAI_API_KEY` for authorization and AI. Keep `DATABASE_PATH` on private persistent storage.
+2. Use your own Nudge Slack app. Create a custom **Slackbot OAuth2 auth config** in Composio with that app’s client credentials. Add the exact redirect URL shown by Composio to Slack’s **OAuth & Permissions → Redirect URLs**. This is separate from Nudge’s `/setup/callback`.
+3. Start `npm run dev`, or `npm run build` then `npm start`. Open the private installer link at the server’s public HTTPS address. For local development, expose port 3000 through a tunnel. Treat the private link as an admin password.
+4. Click **Connect Slack**, approve the workspace, and return to Nudge. Only the installer does this; other members just DM Nudge.
+5. Under **Connect message delivery**, enter the Slack app’s **Signing Secret** (Basic Information → App Credentials) and **Bot User OAuth Token**, starting with `xoxb-` (OAuth & Permissions). Click **Save Slack connection**. Never put credentials in chat. Rotate any credentials previously exposed.
+6. In Slack app settings, keep **Socket Mode off**. Enable **Event Subscriptions** and set the Request URL to `https://YOUR-NUDGE-HOST/webhooks/slack`. Wait for **Verified**, subscribe to the bot event **`message.im`**, and **Save Changes**. Remove the old installing-user `message.im` subscription if present; Nudge must not receive DMs with other people. The bot needs `chat:write` and `im:history`; reinstall if Slack prompts you. No App-Level Token is needed.
+7. Allow messages under **App Home → Messages**. Send a new DM to Nudge and verify “Thinking…” becomes a real reply. Bot-access verification alone does not confirm incoming delivery.
 
-## For the app operator
+No transport switch or alternative Composio webhook setup exists. Existing installations retain their workspace connection and user memory; update Slack’s Request URL to the direct endpoint above.
 
-Requires Node.js 22.22.3+ (Node 24 LTS recommended).
+## Server configuration and security
 
-Configure `.env` before starting the server:
+Requires Node.js 22.22.3+ (Node 24 LTS recommended). See `.env.example` for optional personal-app auth configs and the nudge scheduler.
+
+Instead of the protected credential form, operators may set:
 
 ```dotenv
-COMPOSIO_API_KEY=your-project-api-key
-OPENAI_API_KEY=your-openai-api-key
-DATABASE_PATH=data/nudge.sqlite
+SLACK_SIGNING_SECRET=your-signing-secret
+SLACK_BOT_TOKEN=your-bot-user-oauth-token
+# Optional additional check on signed Slack events:
+SLACK_APP_ID=your-slack-app-id
 ```
 
-Get a **project API key** from <https://dashboard.composio.dev/~/project/settings/api-keys>. A consumer MCP key is not a project key. OpenAI is required only for natural-language coaching; explicit habit commands still work without it.
+Browser-saved credentials take precedence over environment credentials so rotations survive restarts. They are saved atomically in an owner-only (`0600`) `slack-transport.json` beside the SQLite database, excluded from Git and model context. Protect this file and its directory; do not put them inside a static web root. Composio returns masked tokens, so Nudge requires the bot token explicitly rather than attempting to recover it from OAuth responses.
 
-Start the app with `npm run dev`, or `npm run build` followed by `npm start`. The startup message prints a private installer link. `APP_BASE_URL` optionally sets the public address used in that message and the form. For a local server, expose port 3000 through an HTTPS tunnel; open the installer link using the tunnel hostname, not `localhost`, so the OAuth callback returns to the same browser cookie.
+Installer pages are server-rendered and protected by expiring HttpOnly sessions, origin checks and session-bound CSRF tokens. OAuth state is browser-bound. Private links exchange the key for a cookie and redirect to a clean `/setup` URL. Installer sessions persist across restarts for up to eight hours, but expire on key rotation. Protect logs, database backups and private links.
 
-An optional `NUDGE_SETUP_TOKEN` can supply the installer key; otherwise Nudge generates one and saves it in SQLite. Protect server logs, the private link, and the database. Installer sessions use HTTP-only cookies, expire after eight hours, and are cleared by server restarts. Reopen the private link after a restart. Login attempts are rate-limited. Setup pages, progress, and errors are rendered on the server; buttons use ordinary forms and redirects, with same-origin checks and session-bound CSRF tokens. OAuth callbacks are state-checked and bound to the initiating browser. Current installer links work without JavaScript. They contain an admin credential: do not share them or log query strings at a reverse proxy. Responses are non-cacheable, do not send referrers, and redirect away from the credential immediately; browser history or infrastructure may still retain the original private link. Personal app connections are separate and are not part of Slack installation.
+Slack events require an HMAC signature with a five-minute replay window and must match the bot’s verified workspace. Bot messages, edits and non-DMs are ignored; repeated message timestamps are deduplicated. Jobs persist before acknowledgement. Up to four people can be processed concurrently while each person’s messages remain ordered.
 
-### What is saved
+If the tunnel hostname changes, update Slack’s Request URL and Nudge’s public app address. Run one server process per database. Back up SQLite using its online backup facilities or stop the server before copying it; copying only the main database during WAL writes is not reliable.
 
-- SQLite `app_settings`: installation owner, connected account, webhook signing secret, trigger, public URL, and setup key. These settings never enter the model's context.
-- User tables: per-person Markdown memory, latest 12 natural-language chat messages, activities, reminders, and durable jobs.
-- The app does **not** write installation credentials to `.env`. There is no Slack setup CLI or raw Slack-token configuration.
-
-Use a dedicated Composio project. Setup refuses to overwrite another application's webhook subscription. If the tunnel address changes, open the private setup page at the new address and use **Update connection**. Setup expires after 15 minutes if authorization is not completed; start a new connection if it expires. Partial webhook/trigger failures are recoverable from the page without reauthorizing a working connection.
-
-Nudge creates its own Composio-managed auth configuration with explicit permissions: bot `chat:write`, `team:read`, `im:history`, `im:read`; installing-user `team:read`, `im:history`. Composio needs the installing-user workspace permission when it registers the DM trigger. If a connection is missing permissions, the page explains which permission is missing and offers **Reconnect Slack**. Approve the updated grant; existing user memory and reminders are preserved. Updating an auth config alone cannot upgrade a previously granted Slack token.
-
-Keep `data/nudge.sqlite` on private, persistent disk. Back up with SQLite's online backup facilities or stop the server before copying it; copying only the main file during WAL writes is not a reliable backup. Run one server process per database.
-
-## Try it in Slack
-
-### Use your own Slack app (name, icon and enabled DMs)
-
-The shared Composio app's branding and Messages settings belong to Composio. For a Nudge-branded coach, create your own Slack app; Slack CLI and another Bolt server are not required.
-
-1. In Slack app settings, set the name/icon under **Basic Information → Display Information**. Under **App Home**, set the bot name and enable the Messages tab and its option allowing users to send messages.
-2. Configure the bot/user scopes listed above and the bot event `message.im`.
-3. In your dedicated Composio project's **Auth Configs**, create a **Slackbot** OAuth2 configuration using **your own credentials**, not Composio-managed credentials. Enter the Slack app's client ID, client secret, and verification token directly there. For custom Slackbot triggers, Composio requires the verification token in the auth config before a fresh connection is authorized. Never paste these credentials into chat or commit them.
-4. Add the exact OAuth redirect URL shown by Composio to Slack's **OAuth & Permissions → Redirect URLs**. Keep this separate from Nudge's `/setup/callback`: Slack returns to Composio first, then Composio returns to Nudge. Follow Composio's custom Slackbot trigger instructions for Slack's Event Subscriptions request URL; it is **not** Nudge's signed `/webhooks/composio` endpoint.
-5. Set `COMPOSIO_SLACK_AUTH_CONFIG_ID=ac_…` in the server's private `.env` and restart the server to load this operator setting. Nudge will explicitly use that auth config and will not substitute the shared app if it fails.
-6. Open the private setup page, confirm consent, click **Reconnect Slack**, and approve the custom app. This replaces the installed connection without deleting user memory or reminders.
-7. Custom Slack HTTP ingress also needs **Signing Secret** and an **App-Level Token** with `authorizations:read`. Obtain both in Slack's **Basic Information** settings and enter them in the protected **Finish receiving Slack messages** form. The app forwards them to Composio's endpoint configuration (`webhook_signing_secret`, `app_token`); it does not save these credentials in Nudge's database or return them in HTML/status responses. A Verified Request URL does not mean these credentials are configured. Keep Socket Mode **off** for HTTP delivery.
-8. Save and activate delivery. After setup succeeds, DM **Nudge**, not **Composio**. See [Composio's custom OAuth webhook requirements](https://docs.composio.dev/docs/setting-up-triggers/custom-oauth-webhooks) for the distinction between OAuth, provider ingress credentials, and outbound Composio webhook signatures.
-
-The auth config ID is an identifier, not a client secret. Regular Slack users still only DM the bot; this configuration is a one-time operator task.
+## Try it
 
 ```text
 hi
@@ -68,16 +46,15 @@ done Read for five minutes
 progress
 ```
 
-With OpenAI configured, chat naturally about habits, preferences, completed activities, or a specific reminder date/time. You can also send `remind <future ISO timestamp with timezone offset> <message>`, `reminders`, or `cancel <id>`.
+With OpenAI configured, chat naturally about habits and specific reminder dates. Explicit commands also include `remind <future ISO timestamp with timezone offset> <message>`, `reminders`, and `cancel <id>`.
 
-`forget memory` clears Markdown memory and recent chat context, **not** activities or reminders. Relevant memory and context are sent to OpenAI; Slack events and messages pass through Composio. Do not store credentials or highly sensitive information in this prototype.
+Memory is keyed by workspace and Slack user. `forget memory` clears memory and recent chat context, not activities or reminders. Relevant context is sent to OpenAI; never store credentials or highly sensitive information in chat.
 
-## Current limits
+## Limits and verification
 
-- One workspace installation, multiple Slack users.
-- One-time reminders only; no recurring schedules, quiet hours, notification caps, or snoozing yet.
-- The server and public address must remain reachable. Overdue reminders send when the server returns.
-- At-least-once delivery with retries: crashes can still cause duplicates. Do not use this for critical reminders.
-- Installer protection is intentionally lightweight for a hackathon, not a production organization-admin/RBAC system.
+- One workspace installation, multiple people; one-time reminders only.
+- No recurring schedules, quiet hours or snoozing.
+- The server and public URL must stay reachable. Delivery is at-least-once; crashes can still cause duplicates. Do not use for critical reminders.
+- Installer protection is suitable for a hackathon, not full organization-admin/RBAC enforcement.
 
-Run `npm test` and `npm run build` for offline verification. Tests use mocked provider calls; live Slack approval must be performed by the installer.
+Run `npm test` and `npm run build`. Offline tests mock provider calls; confirm real delivery and latency with a new Slack DM.

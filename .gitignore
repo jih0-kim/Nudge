@@ -231,6 +231,8 @@ state/
 
 # Private user memory and SQLite journal files
 data/
+slack-transport.json
+slack-transport.json.*.tmp
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

@@ -32,8 +32,7 @@ export function setupPage({ nonce, status, formToken, publicUrl, error }: SetupP
   const csrf = `<input type="hidden" name="csrf" value="${escapeHtml(formToken || '')}">`;
   const action = status?.reconnectRequired ? 'reconnect' : status?.connected ? 'refresh' : 'connect';
   const button = status?.reconnectRequired ? 'Connect Nudge to Slack →' : status?.connected ? 'Update connection' : 'Connect Slack →';
-  const step = (id: string, number: number, title: string, done: boolean, caption: string) =>
-    `<div class="step${done ? ' done' : ''}" id="step-${id}"><span class="dot">${done ? '✓' : number}</span><div>${title}<small>${escapeHtml(caption)}</small></div></div>`;
+  const deliveryForm = status?.canConfigureDelivery ? `<details id="slack-delivery"${!status.deliveryConfigured || notice ? ' open' : ''}><summary>${status.deliveryConfigured ? 'Update Slack credentials' : 'Connect message delivery'}</summary><p>Paste these two values once. No new OAuth approval is needed. Credentials stay private and are never sent to the AI.</p><form id="delivery-form" method="post" action="/setup/slack-delivery">${csrf}<label for="signing-secret">1. Signing Secret</label><p id="secret-help" class="hint">Slack app → Basic Information → App Credentials → Signing Secret. Click Show, then copy the value—not the Client Secret or a token.</p><input id="signing-secret" name="signingSecret" type="password" autocomplete="off" spellcheck="false" required maxlength="128" aria-describedby="secret-help"><label for="bot-token">2. Bot User OAuth Token</label><p id="bot-help" class="hint">Slack app → OAuth &amp; Permissions → Bot User OAuth Token. Paste the complete value. Slack will verify that it belongs to your bot.</p><input id="bot-token" name="botToken" type="password" autocomplete="off" spellcheck="false" required maxlength="4096" aria-describedby="bot-help"><div id="delivery-feedback" class="notice${notice ? '' : ' success'}" role="status" aria-live="polite" tabindex="-1"${notice ? '' : ' hidden'}>${escapeHtml(notice)}</div><p><button id="delivery-submit" type="submit">Save Slack connection</button></p></form></details>` : '';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connect your coach · Nudge</title>
@@ -41,24 +40,72 @@ export function setupPage({ nonce, status, formToken, publicUrl, error }: SetupP
 ${setupStyles}
 </style></head><body><main>
 <div class="brand"><span class="mark" aria-hidden="true">🌱</span> nudge</div>
-<header><div class="eyebrow">Your personal habit coach</div><h1>Small habits.<br>A little help.</h1><p class="intro">A thoughtful nudge, right where you already chat. Connect Slack once—then everyone can simply message the coach.</p></header>
+<header><div class="eyebrow">Your personal habit coach</div><h1>${status?.ready ? 'See you in Slack.' : 'One workspace.\nEveryone welcome.'}</h1><p class="intro">Install once. Everyone can DM Nudge—with their own private memory and reminders.</p></header>
 ${notice ? `<div id="notice" class="notice" role="alert">${escapeHtml(notice)}</div>` : ''}
 ${!status ? `<section id="unlock" class="card"><h2>Install Nudge in Slack</h2><p>Open the private Slack setup link shared by your server operator. It signs you in automatically and shows the Connect Slack button.</p><p>This is an admin-only page. If you just want to chat, open Nudge in Slack—no key or signup needed.</p>
 <details><summary>Operator: enter an admin key manually</summary><form id="unlock-form" method="post" action="/setup/session"><label for="setup-key">Admin key from the server startup link</label><input id="setup-key" name="token" type="password" autocomplete="off" required maxlength="256"><p class="hint">This protects workspace installation settings. It is not a Slack token or a personal-app connection key.</p><button type="submit">Continue to setup</button></form></details>
 <noscript><p class="hint">You can enter the key from your private link manually—the characters after #token=.</p></noscript></section>` : `
-<section id="dashboard" class="card"><h2>${status.ready ? 'Your coach is ready.' : 'Make room for better habits'}</h2><p>One Slack approval. We’ll take care of the connection and message delivery.</p>
-<div class="steps">
-${step('server', 1, 'App connection', status.composioConfigured, status.composioConfigured ? 'Composio configured on the server' : 'The operator needs to add a Composio project key')}
-${step('slack', 2, 'Slack workspace', status.connected, status.connected ? 'Workspace connection saved' : status.pending ? 'Approval started—finish it in Slack' : 'Waiting for your approval')}
-${step('delivery', 3, 'Reminders & replies', status.ready, status.ready ? 'DM events and message delivery enabled' : 'Configured automatically after approval')}
-</div>
-${status.eventCredentialsRequired ? `<section aria-labelledby="event-credentials-heading"><h2 id="event-credentials-heading">Finish receiving Slack messages</h2><p>Your custom Slack app needs two event-delivery credentials. Enter them here, not in chat. They are sent securely to Composio and are not stored in Nudge’s database.</p><ol><li>Slack app → <strong>Basic Information → App Credentials → Signing Secret</strong>.</li><li>Under <strong>App-Level Tokens</strong>, generate a token named “Nudge events” with the scope <strong>authorizations:read</strong>. Copy the token starting with <strong>xapp-</strong>. This does not require enabling Socket Mode.</li></ol><form method="post" action="/setup/event-credentials">${csrf}<label for="signing-secret">Slack Signing Secret</label><input id="signing-secret" name="signingSecret" type="password" autocomplete="off" required maxlength="128"><label for="app-token">Slack App-Level Token (xapp-…)</label><input id="app-token" name="appToken" type="password" autocomplete="off" required maxlength="512"><p><button type="submit">Save and activate message delivery</button></p></form></section>` : ''}
+<section id="dashboard" class="card"><h2>${status.ready ? 'Your bot is connected.' : status.connected ? 'Finish connecting Nudge' : 'Connect your workspace'}</h2>
+<p>${status.ready ? 'Bot access verified. Send a fresh DM to confirm event delivery.' : status.pending ? 'Finish approval in Slack, then return here.' : 'Only the installer approves access. Everyone else just sends a DM.'}</p>
+${deliveryForm}
+<details${!status.ready ? ' open' : ''}><summary>Slack app event settings</summary><p>Keep Socket Mode off. In Event Subscriptions, enable events, set this Request URL, and subscribe to the bot event <strong>message.im</strong>:</p><p><code>${escapeHtml(publicUrl)}/webhooks/slack</code></p><p class="hint">Remove the old message.im subscription under user events, if present. Save Changes. Allow messages under App Home. This is a one-time app setting, not a step for each person. Bot permissions: chat:write and im:history.</p><p class="hint">Connection readiness verifies bot access only. A new DM confirms event delivery.</p></details>
 ${status.ready ? '<div id="ready-note" class="notice success">You’re connected. Open Slack, find the installed bot under Apps, and send “hi”. Each person gets their own private memory.</div><p><a class="button" href="https://app.slack.com" target="_blank" rel="noopener noreferrer">Open Slack ↗</a></p>' : ''}
-${status.eventCredentialsRequired ? '<details><summary>Other connection settings</summary>' : ''}<form id="connect-form" method="post" action="/setup/${action}">${csrf}<label for="public-url">Public app address</label><input id="public-url" name="publicUrl" type="url" value="${escapeHtml(publicUrl)}" placeholder="https://your-app.example.com" required><p class="hint">The HTTPS address of this Nudge server. We use it to receive Slack messages.</p><label class="check"><input name="consent" type="checkbox" value="yes" required><span>Allow Nudge to configure Slack message delivery for this Composio project. Existing webhooks for other apps won’t be overwritten.</span></label><div class="actions"><button type="submit"${!status.composioConfigured || status.busy ? ' disabled' : ''}>${button}</button>${status.connected && action !== 'reconnect' ? `<button type="submit" class="secondary" formaction="/setup/reconnect"${!status.composioConfigured || status.busy ? ' disabled' : ''}>Reconnect Slack →</button>` : ''}</div></form>${status.eventCredentialsRequired ? '</details>' : ''}
+${status.ready ? '<details><summary>Connection settings</summary>' : ''}<form id="connect-form" method="post" action="/setup/${action}">${csrf}<input type="hidden" name="publicUrl" value="${escapeHtml(publicUrl)}"><input type="hidden" name="consent" value="yes"><p class="hint">Composio manages workspace authorization and connected apps. Chat messages go directly between Slack and Nudge.</p><div class="actions"><button type="submit"${!status.composioConfigured || status.busy ? ' disabled' : ''}>${button}</button>${status.connected && action !== 'reconnect' ? `<button type="submit" class="secondary" formaction="/setup/reconnect"${!status.composioConfigured || status.busy ? ' disabled' : ''}>Reconnect Slack →</button>` : ''}</div></form>${status.ready ? '</details>' : ''}
 ${status.pending && !status.ready && !status.reconnectRequired ? `<form method="post" action="/setup/complete">${csrf}<p><button type="submit" class="secondary">I’ve approved Slack—finish setup</button></p></form>` : ''}
-<p class="hint">Only the installer approves access. Everyone else just sends a DM. Reminder schedules are currently one-time.</p></section>`}
+<p class="hint">Private memory is separated by workspace and Slack user. Reminder schedules are currently one-time.</p></section>`}
 <div class="footer"><span>Memory stored in SQLite · Connections handled by Composio</span>${status ? `<form method="post" action="/setup/logout">${csrf}<button type="submit" class="quiet">Lock setup page</button></form>` : ''}</div>
 </main>
+${status?.canConfigureDelivery ? `<script nonce="${nonce}">
+const deliveryForm = document.getElementById('delivery-form');
+const secretInput = document.getElementById('signing-secret');
+const botInput = document.getElementById('bot-token');
+const feedback = document.getElementById('delivery-feedback');
+const saveButton = document.getElementById('delivery-submit');
+function showDeliveryFeedback(message, failed) {
+  feedback.textContent = message;
+  feedback.className = failed ? 'notice' : 'notice success';
+  feedback.hidden = false;
+  feedback.focus();
+}
+deliveryForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const signingSecret = secretInput.value.trim();
+  const botToken = botInput.value.trim();
+  if (!/^[a-f0-9]{32,64}$/i.test(signingSecret)) {
+    showDeliveryFeedback('Signing Secret: use Basic Information → App Credentials → Signing Secret. This is not a token or Client Secret.', true);
+    secretInput.focus(); return;
+  }
+  if (!botToken || /\\s/.test(botToken)) {
+    showDeliveryFeedback('Paste the complete Bot User OAuth Token from OAuth & Permissions, without spaces.', true);
+    botInput.focus(); return;
+  }
+  if (saveButton.disabled) return;
+  saveButton.disabled = true;
+  saveButton.textContent = 'Checking Slack connection…';
+  showDeliveryFeedback('Checking bot access and saving your connection…', false);
+  try {
+    const response = await fetch(deliveryForm.action, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      body: new URLSearchParams({ signingSecret, botToken, csrf: deliveryForm.elements.namedItem('csrf').value }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      showDeliveryFeedback(result.error || 'Could not save. Your entries are still here; please retry.', true);
+      return;
+    }
+    secretInput.value = ''; botInput.value = '';
+    showDeliveryFeedback('Saved! Now click Retry beside the Request URL in Slack, wait for Verified, and Save Changes. Then send Nudge a new DM.', false);
+    saveButton.textContent = 'Saved';
+  } catch {
+    showDeliveryFeedback('The connection check was interrupted. Your entries are still here. Click Save Slack connection to retry.', true);
+  } finally {
+    saveButton.disabled = false;
+    if (saveButton.textContent !== 'Saved') saveButton.textContent = 'Save Slack connection';
+  }
+});
+</script>` : ''}
 ${!status ? `<script nonce="${nonce}">
 // Only exchange the private URL fragment. All page state and actions are server-rendered.
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
