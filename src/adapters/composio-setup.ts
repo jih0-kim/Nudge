@@ -65,17 +65,38 @@ export class ComposioSetupProvider implements SlackSetupProvider {
     return { subscriptionId: subscription.id, secret: subscription.secret };
   }
 
+  private async ingress() {
+    if (!this.customAuthConfigId) throw new SetupError('Event credentials apply only to a custom Slack app.');
+    const options = { signal: AbortSignal.timeout(20_000) };
+    const config = await this.client.authConfigs.get(this.customAuthConfigId, options);
+    const clientId = config.credentials?.client_id;
+    if (typeof clientId !== 'string' || !clientId) throw new SetupError('The custom Slackbot auth configuration needs the Slack app client ID.');
+    const endpoint = await this.client.webhooks.endpoints.create({ toolkitSlug: 'slackbot', clientId }, options);
+    const configured = Boolean(endpoint.data?.webhook_signing_secret && endpoint.data?.app_token);
+    this.settings.set('slack.ingress', { authConfigId: this.customAuthConfigId, webhookUrl: endpoint.webhookUrl, configured });
+    return endpoint;
+  }
+
+  async configureEventCredentials(signingSecret: string, appToken: string) {
+    const endpoint = await this.ingress();
+    await this.client.webhooks.endpoints.update(endpoint.id, {
+      data: { webhook_signing_secret: signingSecret, app_token: appToken },
+    }, { signal: AbortSignal.timeout(20_000) });
+    // Do not persist either credential locally or expose them in status/errors.
+    this.settings.set('slack.ingress', { authConfigId: this.customAuthConfigId, webhookUrl: endpoint.webhookUrl, configured: true });
+  }
+
   async enableTrigger(connectedAccountId: string) {
     let ingressUrl: string | undefined;
     try {
       if (this.customAuthConfigId) {
-        const config = await this.client.authConfigs.get(this.customAuthConfigId, { signal: AbortSignal.timeout(20_000) });
-        const clientId = config.credentials?.client_id;
-        if (typeof clientId !== 'string' || !clientId) throw new SetupError('The custom Slackbot auth configuration needs the Slack app client ID.');
         // Custom apps need their own Slack -> Composio ingress, separate from
         // the project subscription that forwards signed events to Nudge.
-        const endpoint = await this.client.webhooks.endpoints.create({ toolkitSlug: 'slackbot', clientId }, { signal: AbortSignal.timeout(20_000) });
+        const endpoint = await this.ingress();
         ingressUrl = endpoint.webhookUrl;
+        if (!endpoint.data?.webhook_signing_secret || !endpoint.data?.app_token) {
+          throw new SetupError('Slack event credentials are missing. Add the Signing Secret and an App-Level Token with authorizations:read in the form below. These are separate from OAuth client credentials.');
+        }
       }
       const trigger = await this.client.triggers.create(this.userId, SLACK_DM_TRIGGER, {
         connectedAccountId, triggerConfig: {},

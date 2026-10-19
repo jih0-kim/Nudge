@@ -76,18 +76,26 @@ function toolData(result: Awaited<ReturnType<MessagingSession['execute']>>) {
 /** Fixed, account-bound transport. These tools are never given to the LLM. */
 export class ComposioSlackSender implements MessageSender {
   private cached?: { session: MessagingSession; workspaceId: string; expiresAt: number };
+  private connecting?: Promise<{ session: MessagingSession; workspaceId: string; expiresAt: number }>;
 
   constructor(private createSession: () => Promise<MessagingSession>) {}
 
   private async connection() {
     if (this.cached && this.cached.expiresAt > Date.now()) return this.cached;
-    const session = await this.createSession();
-    const data = toolData(await session.execute(SLACK_TEAM_TOOL, {}));
-    const team = data.team as { id?: unknown } | undefined;
-    if (typeof team?.id !== 'string' || !team.id) throw new Error('Composio did not return a Slack workspace ID');
-    this.cached = { session, workspaceId: team.id, expiresAt: Date.now() + 30 * 60_000 };
-    return this.cached;
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const session = await this.createSession();
+      const data = toolData(await session.execute(SLACK_TEAM_TOOL, {}));
+      const team = data.team as { id?: unknown } | undefined;
+      if (typeof team?.id !== 'string' || !team.id) throw new Error('Composio did not return a Slack workspace ID');
+      this.cached = { session, workspaceId: team.id, expiresAt: Date.now() + 30 * 60_000 };
+      return this.cached;
+    })();
+    try { return await this.connecting; }
+    finally { this.connecting = undefined; }
   }
+
+  async warmup() { await this.connection(); }
 
   private async recipient(target: MessageTarget) {
     const connection = await this.connection();

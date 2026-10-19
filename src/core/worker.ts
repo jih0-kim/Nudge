@@ -11,6 +11,8 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
       store.queueReminders();
       const job = store.claim();
       if (!job) return;
+      const startedAt = Date.now();
+      const timing = (stage: string) => console.log('Slack job timing', JSON.stringify({ jobId: job.id, stage, elapsedMs: Date.now() - startedAt }));
       try {
         const user = store.getUser(job.user_id);
         const target = { workspaceId: user.team_id, channelId: user.channel_id };
@@ -20,6 +22,7 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
           try {
             messageId = await sender.start(target, job.id);
             store.saveMessageId(job.id, messageId);
+            timing('progress-posted');
           } catch { /* A missing progress indicator must never prevent a reply. */ }
         }
         if (response === null) {
@@ -30,9 +33,11 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
             console.error(`Coach request failed for job ${job.id}`);
           }
           store.saveReply(job.id, response);
+          timing('reply-prepared');
         }
         await sender.send(target, response, job.id, messageId);
         store.finish(job);
+        timing('delivered');
       } catch {
         store.retry(job);
         console.error(`Slack delivery failed for job ${job.id}, attempt ${job.attempts}`);

@@ -257,7 +257,7 @@ test('custom Slack apps provision ingress and explain the required Slack verific
   const url = 'https://backend.composio.dev/api/v3.1/webhook_ingress/slack/we_test/trigger_event';
   t.mock.method(client.webhooks.endpoints, 'create', async (options) => {
     assert.deepEqual(options, { toolkitSlug: 'slackbot', clientId: 'slack-client' });
-    return { webhookUrl: url };
+    return { webhookUrl: url, data: { webhook_signing_secret: '********', app_token: '********' } };
   });
   t.mock.method(client.triggers, 'create', async () => { throw new Error("Webhook endpoint exists but hasn't been verified. private-provider-data"); });
   await assert.rejects(new ComposioSetupProvider(client, 'owner', f.settings, 'ac_custom').enableTrigger('ca_custom'), (error: unknown) => {
@@ -268,6 +268,62 @@ test('custom Slack apps provision ingress and explain the required Slack verific
     assert.doesNotMatch(error.message, /private-client-secret|private-provider-data/);
     return true;
   });
+});
+
+test('custom event credentials are required before creating a trigger and are stored only at Composio', async (t) => {
+  const f = fixture(); t.after(() => f.store.close());
+  const client = new Composio({ apiKey: 'test-key', provider: new VercelProvider(), allowTracking: false, disableVersionCheck: true });
+  let configured = false;
+  const secret = 'a'.repeat(32); const token = 'xapp-private-test-token';
+  t.mock.method(client.authConfigs, 'get', async () => ({ credentials: { client_id: 'slack-client' } }));
+  t.mock.method(client.webhooks.endpoints, 'create', async () => ({
+    id: 'we_test', webhookUrl: 'https://backend.composio.dev/events',
+    data: configured ? { webhook_signing_secret: '********', app_token: '********' } : null,
+  }));
+  t.mock.method(client.webhooks.endpoints, 'update', async (id, options) => {
+    assert.equal(id, 'we_test');
+    assert.deepEqual(options.data, { webhook_signing_secret: secret, app_token: token });
+    configured = true;
+    return {};
+  });
+  let triggers = 0;
+  t.mock.method(client.triggers, 'create', async () => { triggers++; return { triggerId: 'ti_custom' }; });
+  const provider = new ComposioSetupProvider(client, 'owner', f.settings, 'ac_custom');
+  await assert.rejects(provider.enableTrigger('ca_custom'), /event credentials are missing/);
+  assert.equal(triggers, 0);
+  await provider.configureEventCredentials(secret, token);
+  assert.equal(await provider.enableTrigger('ca_custom'), 'ti_custom');
+  assert.equal(triggers, 1);
+  const settings = JSON.stringify(f.store.db.prepare('SELECT * FROM app_settings').all());
+  assert.ok(!settings.includes(secret)); assert.ok(!settings.includes(token));
+});
+
+test('event credential forms are admin/CSRF protected and activate delivery without leaking secrets', async (t) => {
+  const f = fixture(); t.after(() => f.store.close());
+  await f.setup.connect('browser', 'https://nudge.example');
+  await f.setup.complete('browser', f.state());
+  Object.assign(f.provider, { authConfigId: 'ac_custom' });
+  const secret = 'b'.repeat(32); const token = 'xapp-private-test-token';
+  f.provider.configureEventCredentials = async (signing, appToken) => {
+    assert.equal(signing, secret); assert.equal(appToken, token);
+    f.settings.set('slack.ingress', { authConfigId: 'ac_custom', configured: true });
+  };
+  f.settings.set('slack.ingress', { authConfigId: 'ac_custom', configured: false });
+  const auth = new SetupAuth('key'); const session = auth.unlock('key')!;
+  const app = createApp(undefined, { auth, setup: f.setup });
+  const headers = { cookie: `nudge_setup=${session}`, origin: 'https://nudge.example', 'content-type': 'application/x-www-form-urlencoded' };
+  const html = await (await app.request('https://nudge.example/setup', { headers })).text();
+  assert.match(html, /Finish receiving Slack messages/);
+  assert.match(html, /authorizations:read/);
+  const post = (csrf: string) => app.request('https://nudge.example/setup/event-credentials', {
+    method: 'POST', headers, body: new URLSearchParams({ signingSecret: secret, appToken: token, csrf }),
+  });
+  assert.equal((await post('invalid')).status, 403);
+  assert.equal((await post(auth.formToken(session)!)).status, 303);
+  assert.equal(f.setup.status().ready, true);
+  const saved = JSON.stringify(f.store.db.prepare('SELECT * FROM app_settings').all());
+  assert.ok(!saved.includes(secret)); assert.ok(!saved.includes(token));
+  await assert.rejects(f.setup.configureEventCredentials('wrong', token), /Signing Secret/);
 });
 
 test('permission failures persist across reloads and reconnect replaces only the authorized installation', async (t) => {

@@ -15,8 +15,14 @@ export class SlackRuntime {
 
   activate(config: SlackConnection) {
     const sender = new ComposioSlackSender(() => createSlackSession(this.client, config));
-    this.webhook = { store: this.store, connectedAccountId: config.connectedAccountId, verify: createComposioVerifier(this.client, config.webhookSecret, config.connectedAccountId) };
     this.worker = createWorker(this.store, sender, (store, user, input) => replyToUser(store, user, input, this.connections));
+    this.webhook = {
+      store: this.store, connectedAccountId: config.connectedAccountId,
+      verify: createComposioVerifier(this.client, config.webhookSecret, config.connectedAccountId),
+      onAccepted: () => { void this.tick().catch(() => console.warn('Slack worker wake-up failed')); },
+    };
+    // Resolve account/workspace before the next DM, without delaying setup HTTP.
+    void sender.warmup().catch(() => console.warn('Slack transport warm-up failed; will retry on demand'));
   }
 
   async tick() { await this.worker?.(); }

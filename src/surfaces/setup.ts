@@ -135,6 +135,14 @@ export function setupRoutes({ auth, setup }: SetupDependencies) {
     await setup.refresh(data.publicUrl);
     return done(c);
   });
+  routes.post('/event-credentials', async (c) => {
+    const data = await body(c);
+    if (typeof data?.signingSecret !== 'string' || typeof data?.appToken !== 'string') {
+      return fail(c, 'Enter both Slack event credentials.', 400);
+    }
+    await setup.configureEventCredentials(data.signingSecret.trim(), data.appToken.trim());
+    return done(c);
+  });
   routes.post('/complete', async (c) => {
     await setup.complete(auth.session(getCookie(c, 'nudge_setup'))!);
     return done(c);

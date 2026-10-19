@@ -7,6 +7,7 @@ import type { Store } from '../core/store.js';
 export interface ComposioWebhookDependencies {
   store: Store;
   connectedAccountId: string;
+  onAccepted?(): void;
   verify(body: string, headers: Headers): Promise<IncomingTriggerPayload>;
 }
 
@@ -32,6 +33,12 @@ export function composioRoutes(source: ComposioWebhookSource) {
       return c.json({ error: 'Connected account not configured' }, 403);
     }
     // Persist before acknowledgement; AI and message delivery happen in the worker.
+    if (result === 'accepted') {
+      const slackAt = Number(event.payload?.ts) * 1000;
+      if (Number.isFinite(slackAt)) console.log('Slack event timing', JSON.stringify({ arrivalDelayMs: Math.max(0, Date.now() - slackAt) }));
+      // Do not await external calls or let a wake-up failure change the durable ACK.
+      try { dependencies.onAccepted?.(); } catch { console.warn('Slack worker wake-up failed'); }
+    }
     return c.json({ ok: true });
   });
   return routes;

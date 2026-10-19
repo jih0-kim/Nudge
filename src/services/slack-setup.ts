@@ -26,6 +26,7 @@ export interface SlackSetupProvider {
   isActive(accountId: string): Promise<boolean>;
   configureWebhook(publicUrl: string, previous?: SlackInstallation): Promise<{ subscriptionId: string; secret: string }>;
   enableTrigger(accountId: string): Promise<string>;
+  configureEventCredentials?(signingSecret: string, appToken: string): Promise<void>;
 }
 
 export class SetupError extends Error {
@@ -61,15 +62,18 @@ export class SlackSetup {
     const error = this.settings.get<{ message: string; code?: string }>('slack.setup-error');
     const appChanged = Boolean(installation && this.provider?.authConfigId
       && installation.authConfigId !== this.provider.authConfigId);
+    const ingress = this.settings.get<{ authConfigId: string; webhookUrl: string; configured: boolean }>('slack.ingress');
+    const eventCredentialsRequired = Boolean(ingress && ingress.authConfigId === this.provider?.authConfigId && !ingress.configured);
     return {
       composioConfigured: Boolean(this.provider), aiConfigured: this.aiConfigured,
       connected: Boolean(installation?.connectedAccountId),
-      ready: Boolean(this.provider && installation?.triggerId && installation?.webhookSecret && !appChanged),
+      ready: Boolean(this.provider && installation?.triggerId && installation?.webhookSecret && !appChanged && !eventCredentialsRequired),
       pending: Boolean(pending && pending.expiresAt > Date.now()),
       publicUrl: installation?.publicUrl || this.defaultPublicUrl || '',
       busy: this.busy, error: error?.message || null,
       reconnectRequired: appChanged || error?.code === 'missing_permissions',
       appChanged,
+      eventCredentialsRequired,
     };
   }
 
@@ -121,6 +125,20 @@ export class SlackSetup {
       if (!await this.requireProvider().isActive(previous.connectedAccountId)) throw new SetupError('The Slack connection is no longer active. Reauthorize it in Composio.');
       await this.install(previous.connectedAccountId, publicBaseUrl(baseUrl));
       this.settings.delete('slack.pending');
+    });
+  }
+
+  async configureEventCredentials(signingSecret: string, appToken: string) {
+    return this.exclusive(async () => {
+      const installation = this.installation();
+      if (!installation) throw new SetupError('Connect your Slack workspace before configuring event delivery.');
+      if (!/^[a-f0-9]{32,64}$/i.test(signingSecret) || !/^xapp-[A-Za-z0-9-]+$/.test(appToken)) {
+        throw new SetupError('Use the Slack app Signing Secret and an App-Level Token starting with xapp-. Do not use a client secret, verification token, or bot token.');
+      }
+      const provider = this.requireProvider();
+      if (!provider.configureEventCredentials) throw new SetupError('This connection does not support custom event credentials.');
+      await provider.configureEventCredentials(signingSecret, appToken);
+      await this.install(installation.connectedAccountId, installation.publicUrl);
     });
   }
 

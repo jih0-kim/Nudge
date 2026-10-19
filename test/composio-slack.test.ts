@@ -123,6 +123,50 @@ test('sender checks workspace, reuses sessions and uses native Markdown', async 
   assert.equal(calls.length, 3); // No message sent to the wrong workspace.
 });
 
+test('transport warm-up shares one session and workspace check with concurrent sends', async () => {
+  let sessions = 0; let checks = 0; let sent = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const sender = new ComposioSlackSender(async () => {
+    sessions++; await gate;
+    return { execute: async (slug) => {
+      if (slug === 'SLACKBOT_FETCH_TEAM_INFO') { checks++; return completed({ team: { id: 'T1' } }); }
+      sent++; return completed({ ok: true });
+    } };
+  });
+  const warming = sender.warmup();
+  const sending = sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'Hello', 1);
+  assert.equal(sessions, 1);
+  release();
+  await Promise.all([warming, sending]);
+  await sender.send({ workspaceId: 'T1', channelId: 'D1' }, 'Again', 2);
+  assert.equal(sessions, 1); assert.equal(checks, 1); assert.equal(sent, 2);
+});
+
+test('verified DMs wake the worker after persistence without waiting for processing', async (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  let wakes = 0;
+  const app = createApp({ store, connectedAccountId: 'ca_1', verify: createComposioVerifier(client(), 'secret'),
+    onAccepted() {
+      wakes++;
+      assert.equal(store.db.prepare('SELECT count(*) AS n FROM jobs').get()!.n, 1);
+      throw new Error('worker wake failed'); // The persisted event must still be acknowledged.
+    },
+  });
+  const request = (payload: unknown) => {
+    const body = JSON.stringify(payload);
+    return app.request('/webhooks/composio', { method: 'POST', body, headers: signedHeaders(body) });
+  };
+  assert.equal((await request(envelope())).status, 200);
+  assert.equal(wakes, 1);
+  const other = envelope(); other.metadata.connected_account_id = 'ca_other';
+  assert.equal((await request(other)).status, 403);
+  assert.equal(wakes, 1);
+  const bot = { ...envelope(), data: { ...envelope().data, bot_id: 'B1' } };
+  assert.equal((await request(bot)).status, 200);
+  assert.equal(wakes, 1);
+});
+
 test('thinking message is updated in place with paragraph spacing and escaped Slack entities', async () => {
   const calls: { slug: string; args: unknown }[] = [];
   const sender = new ComposioSlackSender(async () => ({ execute: async (slug, args) => {
