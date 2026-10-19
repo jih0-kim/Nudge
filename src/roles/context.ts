@@ -14,6 +14,7 @@ export type RunContext = {
   events: Event[]; // everything known so far, including events found earlier in this run
   now: Date;
   dry: boolean; // read only: no Slack posts, calendar events, commits, or event writes
+  liveDemo?: boolean; // one quest at a time; only a checkmark completes it
   toolkits: Set<string>; // Composio toolkits with an active connection
   runtime: Runtime;
 };

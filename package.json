@@ -15,6 +15,7 @@
     "test": "tsx --test test/*.test.ts",
     "nudge": "tsx --env-file-if-exists=.env src/surfaces/cli.ts run",
     "demo": "tsx src/surfaces/cli.ts demo",
+    "demo:live": "tsx --env-file-if-exists=.env src/scripts/live-demo.ts",
     "status": "tsx src/surfaces/cli.ts status",
     "render": "tsx src/surfaces/cli.ts render"
   },

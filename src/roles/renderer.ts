@@ -17,7 +17,7 @@ export async function render(ctx: RunContext, state: PetState, changed: boolean)
   writeFileSync(join(OUT, PROFILE_PATH), svg);
   log("Renderer", `${OUT}/${PROFILE_PATH} written (stage ${state.stage}, ${state.mood})`);
 
-  if (!changed) return;
+  if (!changed || ctx.liveDemo) return;
   const [owner, repo] = ctx.config.pet.profile_repo.split("/");
   if (ctx.dry) {
     log("Renderer", `[dry] would commit ${PROFILE_PATH} to ${owner}/${repo}`);

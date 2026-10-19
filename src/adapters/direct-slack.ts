@@ -1,5 +1,6 @@
 import type { MessageSender, MessageTarget } from '../core/messaging.js';
 import { splitPetImage } from '../core/status.js';
+import type { ConversationMessage } from '../core/conversation-loop.js';
 
 type SlackResult = Record<string, unknown>;
 
@@ -17,7 +18,7 @@ export class SlackConnectionError extends Error {}
 
 /** Server-only bot credentials. Never expose this transport to the model. */
 export class DirectSlackSender implements MessageSender {
-  private connection?: Promise<{ token: string; workspaceId: string; expiresAt: number }>;
+  private connection?: Promise<{ token: string; workspaceId: string; botId: string; expiresAt: number }>;
 
   constructor(private token: () => Promise<string>, private request: typeof fetch = fetch) {}
 
@@ -53,13 +54,20 @@ export class DirectSlackSender implements MessageSender {
       if (typeof identity.team_id !== 'string' || !identity.team_id || !identity.bot_id) {
         throw new SlackConnectionError('Slack accepted the token, but it does not identify a bot. Use the Bot User OAuth Token, not a user token.');
       }
-      return { token, workspaceId: identity.team_id, expiresAt: Date.now() + 30 * 60_000 };
+      return { token, workspaceId: identity.team_id, botId: String(identity.bot_id), expiresAt: Date.now() + 30 * 60_000 };
     })();
     try { return await this.connection; }
     catch (error) { this.connection = undefined; throw error; }
   }
 
   async warmup() { return (await this.connect()).workspaceId; }
+
+  async conversation(target: MessageTarget, messageId?: string) {
+    const token = await this.recipient(target);
+    const result = await this.call(token, 'conversations.history', { channel: target.channelId,
+      ...(messageId ? { oldest: messageId, latest: messageId, inclusive: true, limit: 1 } : { limit: 30 }) });
+    return { botId: (await this.connect()).botId, messages: (Array.isArray(result.messages) ? result.messages : []) as ConversationMessage[] };
+  }
 
   private async recipient(target: MessageTarget) {
     const connection = await this.connect();

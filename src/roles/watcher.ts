@@ -10,7 +10,7 @@ const REACTION_TO_INDEX: Record<string, number> = { one: 0, two: 1, three: 2 };
 const PICK_REPLY = /^\s*([123])\s*$/;
 const DONE_REACTIONS = ["white_check_mark", "heavy_check_mark", "ballot_box_with_check"];
 
-export async function watch(ctx: RunContext): Promise<Event[]> {
+export async function watch(ctx: RunContext, slack = { getReplies, getMessage }): Promise<Event[]> {
   if (!ctx.toolkits.has("slack") || !ctx.runtime.slack_channel) {
     log("Watcher", "Slack not connected or no quest sent yet, nothing to read");
     return [];
@@ -23,12 +23,14 @@ export async function watch(ctx: RunContext): Promise<Event[]> {
     const channel = ctx.runtime.quest_channels?.[q.proposed.quest_id] ?? ctx.runtime.slack_channel;
 
     // Our own posts carry bot_id (sent through the Composio app); the user's replies do not.
-    const replies = (await getReplies(channel, ts)).filter((r) => !r.bot_id && r.text?.trim());
-    const message = await getMessage(channel, ts);
+    const replies = (await slack.getReplies(channel, ts)).filter((r) => !r.bot_id && r.text?.trim()
+      && (!ctx.runtime.slack_user || r.user === ctx.runtime.slack_user));
+    const message = await slack.getMessage(channel, ts);
+    const reactions = message?.reactions?.filter((r) => !ctx.runtime.slack_user || r.users?.includes(ctx.runtime.slack_user));
     let accepted = q.accepted;
 
     if (!accepted) {
-      const byReaction = pickFromReactions(message?.reactions);
+      const byReaction = pickFromReactions(reactions);
       const byReply = replies.map((r) => PICK_REPLY.exec(r.text!)).find(Boolean);
       const index = byReaction ?? (byReply ? Number(byReply[1]) - 1 : undefined);
       const option = index === undefined ? undefined : q.proposed.options[index];
@@ -40,7 +42,7 @@ export async function watch(ctx: RunContext): Promise<Event[]> {
     }
 
     const option = q.proposed.options.find((o) => o.id === accepted?.option) ?? q.proposed.options[0];
-    const evidence = await findEvidence(q.proposed.quest_id, replies, message?.reactions, option.what, ctx.now);
+    const evidence = await findEvidence(q.proposed.quest_id, replies, reactions, option.what, ctx.now, ctx.liveDemo);
     if (!evidence) continue;
     if (!accepted) {
       // Doing the quest counts as accepting it.
@@ -72,7 +74,13 @@ async function findEvidence(
   reactions: SlackReaction[] | undefined,
   quest: string,
   now: Date,
+  checkOnly = false,
 ): Promise<{ ts: string; text: string } | undefined> {
+  if (checkOnly) {
+    if (!reactions?.some((r) => DONE_REACTIONS.includes(r.name))) return undefined;
+    const updates = replies.filter((r) => !PICK_REPLY.test(r.text!)).map((r) => r.text).join("\n").slice(-4000);
+    return { ts: now.toISOString(), text: updates ? `reacted ✅\n${updates}` : "reacted ✅" };
+  }
   for (const reply of replies.filter((r) => !PICK_REPLY.test(r.text!))) {
     if (await looksLikeEvidence(reply.text!, quest)) return { ts: slackTsToIso(reply.ts), text: reply.text! };
     log("Watcher", `${questId} reply "${reply.text}" does not look like a summary, ignored`);

@@ -22,15 +22,17 @@ import type { Event, HabitConfig } from "./types.js";
 import { DEFAULT_CONFIG, DEFAULT_EVENTS } from "./status.js";
 export { DEFAULT_CONFIG, DEFAULT_EVENTS };
 
-export type RunOptions = { configPath?: string; eventsPath?: string; dry?: boolean; now?: Date };
+export type RunOptions = { configPath?: string; eventsPath?: string; dry?: boolean; now?: Date; liveDemo?: boolean };
 
 export async function run({
   configPath = DEFAULT_CONFIG,
   eventsPath = DEFAULT_EVENTS,
   dry = false,
   now = new Date(),
+  liveDemo = false,
 }: RunOptions = {}) {
   const config = loadConfig(configPath);
+  if (liveDemo) config.schedule.use_calendar = false;
   const runtimePath = join(dirname(eventsPath), "runtime.json");
   const before = readEvents(eventsPath);
   const ctx: RunContext = {
@@ -38,6 +40,7 @@ export async function run({
     events: before,
     now,
     dry,
+    liveDemo,
     toolkits: await connectedToolkits().catch(() => new Set<string>()),
     runtime: readRuntime(runtimePath),
   };
@@ -58,7 +61,7 @@ export async function run({
   if (habit) {
     const duration = state.nextDurationMin[habit.id];
     const options = await scout(habit, duration, ctx.events, await coachMemory(ctx));
-    const slot = pickSlot(habit.id, ctx.events, config, now);
+    const slot = liveDemo ? { at: now, reason: "start now" } : pickSlot(habit.id, ctx.events, config, now);
     log("Scheduler", `${habit.id}: ${slot.at.toISOString()}${slot.reason ? ` (${slot.reason})` : ""}`);
     const questId = `q-${now.getTime().toString(36)}`;
     const sent = await sendQuest(ctx, habit, formatQuest(ctx, state, options, slot, duration));
@@ -91,15 +94,19 @@ export async function run({
 }
 
 /** One quest per run: the habit without a quest in flight that was nudged least recently. Nothing during quiet hours. */
-function nextHabit(ctx: RunContext): HabitConfig | undefined {
+export function nextHabit(ctx: RunContext): HabitConfig | undefined {
   const { schedule } = ctx.config;
   const w = wallTime(ctx.now, schedule.timezone);
-  if (inRange(w.hour * 60 + w.minute, parseRange(schedule.quiet_hours))) {
+  if (!ctx.liveDemo && inRange(w.hour * 60 + w.minute, parseRange(schedule.quiet_hours))) {
     log("Scout", `quiet hours (${schedule.quiet_hours}), no new quest`);
     return undefined;
   }
 
   const quests = [...questStatuses(ctx.events).values()];
+  if (ctx.liveDemo && quests.some((q) => isOpen(q, ctx.now))) {
+    log("Scout", "waiting for ✅ on the current quest");
+    return undefined;
+  }
   const candidates = ctx.config.habits.filter((h) => !quests.some((q) => q.proposed.habit === h.id && isOpen(q, ctx.now)));
   if (candidates.length === 0) {
     log("Scout", "every habit already has a quest in flight, no new quest");
@@ -127,21 +134,34 @@ function writeRuntime(path: string, runtime: Runtime) {
   writeFileSync(path, JSON.stringify(runtime, null, 2) + "\n");
 }
 
-/**
- * Runs the loop now and then every `minutes`, never two passes at once. For the server (src/index.ts).
- * Returns a stop function that waits for a pass in progress.
- */
-export function scheduleRuns(minutes: number): () => Promise<void> {
+/** Seconds take precedence over the legacy minutes setting. Zero disables the loop. */
+export function loopIntervalSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const seconds = env.NUDGLING_INTERVAL_SECONDS !== undefined
+    ? Number(env.NUDGLING_INTERVAL_SECONDS)
+    : env.NUDGLING_INTERVAL_MIN !== undefined ? Number(env.NUDGLING_INTERVAL_MIN) * 60 : 20;
+  if (!Number.isFinite(seconds) || seconds < 0 || (seconds > 0 && seconds < 0.001) || seconds * 1000 > 2_147_483_647) {
+    throw new Error('Nudgling interval must be 0 (disabled) or 0.001–2147483.647 seconds');
+  }
+  return seconds;
+}
+
+/** Native server loop: starts automatically, never overlaps, and drains on shutdown. */
+export function scheduleRuns(seconds: number, pass: () => Promise<unknown>): () => Promise<void> {
+  loopIntervalSeconds({ NUDGLING_INTERVAL_SECONDS: String(seconds) });
+  if (seconds === 0) return async () => {};
+  let stopped = false;
   let running: Promise<unknown> | undefined;
   const tick = () => {
-    running ??= run()
+    if (stopped) return;
+    running ??= Promise.resolve().then(pass)
       .catch((error) => log("Run", `failed: ${(error as Error).message}`))
       .finally(() => (running = undefined));
   };
-  const first = setTimeout(tick, 5_000);
-  const timer = setInterval(tick, minutes * 60_000);
-  log("Run", `nudge loop every ${minutes} min`);
+  const first = setTimeout(tick, Math.min(5_000, seconds * 1000));
+  const timer = setInterval(tick, seconds * 1000);
+  log("Run", `conversation update checks every ${seconds} seconds; idle conversations stay silent`);
   return async () => {
+    stopped = true;
     clearTimeout(first);
     clearInterval(timer);
     await running;

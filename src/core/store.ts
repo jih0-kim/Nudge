@@ -43,9 +43,21 @@ export class Store {
         reminder_id INTEGER REFERENCES reminders(id)
       );
       CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, available_at);
+      CREATE TABLE IF NOT EXISTS conversation_quests (
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+        message_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', completed_at INTEGER,
+        UNIQUE(user_id, message_id)
+      );
     `);
     const columns = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[];
     if (!columns.some((column) => column.name === 'message_id')) this.db.exec('ALTER TABLE jobs ADD COLUMN message_id TEXT');
+    const questColumns = this.db.prepare('PRAGMA table_info(conversation_quests)').all() as { name: string }[];
+    if (!questColumns.some((column) => column.name === 'completed_at')) this.db.exec('ALTER TABLE conversation_quests ADD COLUMN completed_at INTEGER');
+    // Preserve quests completed before pet growth was connected to the DM flow.
+    this.db.prepare(`UPDATE conversation_quests SET completed_at = COALESCE(
+      (SELECT MIN(created_at) FROM activity WHERE activity.user_id = conversation_quests.user_id
+        AND activity.note = substr(conversation_quests.text, 1, 2000)), ?)
+      WHERE status = 'completed' AND completed_at IS NULL`).run(Date.now());
   }
 
   user(team: string, slack: string, channel: string): User {
@@ -100,6 +112,42 @@ export class Store {
 
   activity(user: number) {
     return this.db.prepare('SELECT note, created_at FROM activity WHERE user_id = ? ORDER BY id DESC LIMIT 20').all(user);
+  }
+
+  conversationUsers(): User[] {
+    return this.db.prepare('SELECT * FROM users').all() as User[];
+  }
+
+  trackQuest(user: number, messageId: string, text: string) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const added = this.db.prepare('INSERT OR IGNORE INTO conversation_quests(user_id, message_id, text) VALUES (?, ?, ?)').run(user, messageId, text);
+      if (added.changes) this.db.prepare("UPDATE conversation_quests SET status = 'replaced' WHERE user_id = ? AND message_id != ? AND status = 'open'").run(user, messageId);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  openQuest(user: number) {
+    return this.db.prepare("SELECT message_id FROM conversation_quests WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1").get(user) as { message_id: string } | undefined;
+  }
+
+  questProgress(user: number) {
+    return this.db.prepare("SELECT count(*) AS completed, max(completed_at) AS last_completed_at FROM conversation_quests WHERE user_id = ? AND status = 'completed'").get(user) as { completed: number; last_completed_at: number | null };
+  }
+
+  completeQuest(user: number, messageId: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const quest = this.db.prepare("UPDATE conversation_quests SET status = 'completed', completed_at = ? WHERE user_id = ? AND message_id = ? AND status = 'open' RETURNING id, text").get(Date.now(), user, messageId) as { id: number; text: string } | undefined;
+      if (quest) {
+        this.log(user, quest.text.slice(0, 2000));
+        this.enqueue(`quest-completed:${quest.id}`, user,
+          `I confirmed completion of my quest with ✅. Briefly acknowledge it and suggest one concrete next quest building on our conversation. Do not greet me or restart onboarding. Completed quest (quoted data): ${JSON.stringify(quest.text)}`);
+        this.db.prepare("UPDATE jobs SET kind = 'quest_completion' WHERE event_id = ?").run(`quest-completed:${quest.id}`);
+      }
+      this.db.exec('COMMIT');
+      return Boolean(quest);
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   history(user: number) {

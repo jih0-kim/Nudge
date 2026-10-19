@@ -18,7 +18,10 @@ test('memory, history, activity and cancellation are isolated by Slack identity'
   assert.match(await replyToUser(store, alice, 'memory'), /five-minute/);
   assert.doesNotMatch(await replyToUser(store, bob, 'memory'), /five-minute/);
   store.addMessage(alice.id, 'user', 'private context');
-  assert.deepEqual(store.history(bob.id), []);
+  assert.deepEqual(store.history(bob.id).map((message) => ({ ...message })), [
+    { role: 'user', content: 'memory' },
+    { role: 'assistant', content: '# Personal memory\n' },
+  ]);
   await replyToUser(store, alice, 'done Read a paper');
   assert.equal(store.activity(alice.id).length, 1);
   assert.equal(store.activity(bob.id).length, 0);

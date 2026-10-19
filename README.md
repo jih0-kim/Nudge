@@ -1,6 +1,6 @@
 # Nudge
 
-Nudgling is a habit-building assistant with persistent Markdown memory, Slack DMs, one-time reminders, and activity logging. Multiple users in one Slack workspace can use it without a separate signup. The virtual pet and recurring habit schedules are not implemented yet.
+Nudgling is a habit-building assistant with persistent Markdown memory, Slack DMs, a growing virtual pet, one-time reminders, and activity logging. Multiple users in one Slack workspace can use it without a separate signup. Recurring habit schedules are not implemented yet.
 
 ## Getting started
 
@@ -17,6 +17,53 @@ The server defaults to `http://localhost:3000`. Set `PORT` in `.env` to change i
 Open the **private installer link** printed at startup using your public HTTPS hostname. Connect your workspace through Composio, save the Slack Signing Secret and bot token in the protected form, then point Slack events to `/webhooks/slack`. Chat goes directly between Slack and Nudge; Composio handles authorization and connected apps. See [browser setup](docs/SETUP.md).
 
 ## Commands
+
+### Automatic quest loop
+
+The server automatically checks your **Nudge DM conversation** every **20 seconds**—no
+separate command or Composio Slack connection. New user messages receive immediate
+contextual replies; they can change the plan even while a quest is unfinished.
+Idle conversations stay silent, without AI calls. React **✅ on Nudge's "Quest:"
+message** to log completion and trigger the next suggestion. Thread text alone does
+not complete a task. Repeated checks of the same reaction never repeat completion.
+
+Set `NUDGLING_INTERVAL_SECONDS` in `.env` to any supported interval in seconds
+(for example `20`, `60`, or `3600`), then restart the server. `0` disables the loop.
+The legacy `NUDGLING_INTERVAL_MIN` is still accepted when the seconds setting is
+absent. With neither setting, the default is 20 seconds.
+
+The native conversation loop makes no calendar writes or GitHub commits. It uses
+the same bot token and per-user SQLite history as chat (`chat:write`, `im:history`).
+Only the requesting person's checkmark on this bot's quest counts; checkmarks on
+ordinary replies do nothing. Ask Nudge for a quest to begin. Slow checks never
+overlap another pass. The older file-based quest/demo commands remain separate.
+
+**Pet growth:** `status` reads your own confirmed quest completions from SQLite,
+including quests completed before this status integration was added. Each unique
+✅-completed quest counts once. Completion replies include the real pet stage and
+image. Native hackathon mode (default, `NUDGLING_DEMO=1`) grows Egg → Cracked →
+Hatchling → Child → Teen → Adult after five quests. Set `NUDGLING_DEMO=0` for
+long-term milestones at 1, 7, 21, 42, and 66 quests. Generic `done` / activity notes
+are logged separately and do not count as checked-off quests. Native status no
+longer shows unrelated sample habits from the old file-based demo.
+
+### Optional bounded demo
+
+```sh
+npm run demo:live -- 180
+```
+
+Runs for three minutes (20–600 seconds supported); Ctrl+C stops early. Requires the
+Composio `slack` connection for `COMPOSIO_USER_ID`; `slackbot` is preferred for delivery.
+Checks quest reactions and thread updates every 20 seconds without overlapping passes.
+Only your ✅ (also ✔️ or ☑️) on the quest completes it; thread text alone does not.
+The next pass records completion, grows the pet, and suggests the next task using your
+completed-task updates. One quest stays open at a time. AI/search may make a pass take
+longer than 20 seconds.
+
+Demo mode ignores quiet hours, proposes tasks for now, and makes **no calendar writes
+or GitHub commits**. It keeps resumable state under `state/live-demo/`, separate from
+the server's regular loop. `npm run demo` remains the offline pet-animation replay.
 
 | Command | Description |
 | --- | --- |
