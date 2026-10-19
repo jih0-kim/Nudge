@@ -21,15 +21,13 @@ export async function watch(ctx: RunContext): Promise<Event[]> {
     const ts = q.proposed.slack_ts;
     if (q.completed || !ts || isStale(q, ctx.now)) continue;
 
-    // Our own posts carry bot_id (sent through the bot or the Composio app); the user's replies do not.
-    const thread = await getReplies(channel, ts);
-    const replies = thread.filter((r) => !r.bot_id && r.text?.trim());
+    // Our own posts carry bot_id (sent through the Composio app); the user's replies do not.
+    const replies = (await getReplies(channel, ts)).filter((r) => !r.bot_id && r.text?.trim());
     let accepted = q.accepted;
 
     if (!accepted) {
-      // A pick can land on the quest itself or on our options message in its thread.
-      const ours = [await getMessage(channel, ts), ...thread.filter((r) => r.bot_id)];
-      const byReaction = ours.map((m) => pickFromReactions(m?.reactions)).find((i) => i !== undefined);
+      const message = await getMessage(channel, ts);
+      const byReaction = pickFromReactions(message?.reactions);
       const byReply = replies.map((r) => PICK_REPLY.exec(r.text!)).find(Boolean);
       const index = byReaction ?? (byReply ? Number(byReply[1]) - 1 : undefined);
       const option = index === undefined ? undefined : q.proposed.options[index];
