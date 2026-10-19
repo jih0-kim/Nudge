@@ -123,7 +123,7 @@ Research basis: Lally et al. (2010), mean 66 days to automaticity (range 18 to 2
 
 ### 4.3 Duration
 
-- 4+ of last 5 completed: +5 min. Fewer than half: -5 min. Clamp to `min`/`max`.
+- Each quest uses the habit's `start` duration; `min` when the pet is sleepy (4.2). No automatic growth or shrinking.
 
 ### 4.4 Slot
 

@@ -32,38 +32,9 @@ export function parseMinutes(s: string): number {
   return Number(m[1]);
 }
 
-/**
- * Next quest duration: +5 min if 4+ of last 5 proposed quests were completed,
- * -5 min if fewer than half were, clamped to [min, max]. Sleepy mood -> min.
- */
-export function nextDuration(
-  events: Event[],
-  habitId: string,
-  cfg: { start: string; min: string; max: string },
-  mood: Mood,
-): number {
-  const min = parseMinutes(cfg.min);
-  const max = parseMinutes(cfg.max);
-  if (mood === "sleepy") return min;
-
-  const proposed = events.filter(
-    (e): e is Extract<Event, { type: "quest_proposed" }> =>
-      e.type === "quest_proposed" && e.habit === habitId,
-  );
-  const completedIds = new Set(
-    events.filter((e) => e.type === "quest_completed" && e.habit === habitId).map((e) => (e as QuestCompleted).quest_id),
-  );
-
-  let duration = parseMinutes(cfg.start);
-  // Replay adjustments in order so the result is reproducible from the log.
-  for (let i = 5; i <= proposed.length; i++) {
-    const window = proposed.slice(i - 5, i);
-    const done = window.filter((p) => completedIds.has(p.quest_id)).length;
-    if (done >= 4) duration += 5;
-    else if (done < 2.5) duration -= 5;
-    duration = Math.min(max, Math.max(min, duration));
-  }
-  return duration;
+/** Next quest duration: the habit's start duration, or its minimum when the pet is sleepy (SPEC.md 4.2). */
+export function nextDuration(cfg: { start: string; min: string; max: string }, mood: Mood): number {
+  return parseMinutes(mood === "sleepy" ? cfg.min : cfg.start);
 }
 
 export function computeState(events: Event[], config: Config, now: Date = new Date()): PetState {
@@ -80,7 +51,7 @@ export function computeState(events: Event[], config: Config, now: Date = new Da
   const mood = moodFor(lastCompletedAt, now);
 
   const nextDurationMin: Record<string, number> = {};
-  for (const h of config.habits) nextDurationMin[h.id] = nextDuration(events, h.id, h.duration, mood);
+  for (const h of config.habits) nextDurationMin[h.id] = nextDuration(h.duration, mood);
 
   const byClient: Record<string, number> = {};
   for (const c of completions) byClient[c.client] = (byClient[c.client] ?? 0) + 1;
