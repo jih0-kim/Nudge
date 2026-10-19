@@ -1,6 +1,7 @@
 import { generateText, isStepCount, jsonSchema, tool } from 'ai';
 import { getLanguageModel } from '../adapters/llm.js';
 import type { Store, User } from './store.js';
+import { currentStatus } from './status.js';
 
 const help = `I'm your habit coach. No signup needed—your Slack identity keeps your memory separate.
 
@@ -14,6 +15,7 @@ Tell me your timezone and one habit you'd like to build. You can chat naturally,
 • cancel 12 — cancel a pending reminder
 • done Read for five minutes
 • progress — recent activity
+• status — how much your Nudgling has grown
 
 Reminders are one-time in this version. Use an explicit date and time; quiet hours and recurring schedules aren't implemented yet. Memory and recent chat context are stored in the app's SQLite database; relevant context is sent to OpenAI when you chat. "forget memory" does not remove activity or reminders.`;
 
@@ -85,6 +87,10 @@ export async function replyToUser(store: Store, user: User, input: string): Prom
   if (/^done\s+/i.test(text)) {
     store.log(user.id, text.replace(/^done\s+/i, ''));
     return 'Nice work—activity saved.';
+  }
+  if (/^(status|pet)$/i.test(text)) {
+    try { return currentStatus(); }
+    catch { return 'No Nudgling yet. Start the nudge loop so your first quest arrives.'; }
   }
   if (/^progress$/i.test(text)) {
     const activity = store.activity(user.id) as { note: string; created_at: number }[];

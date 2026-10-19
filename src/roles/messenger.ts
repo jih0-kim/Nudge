@@ -2,17 +2,16 @@
 import { postMessage, whoAmI, type SlackVia } from "../adapters/slack.js";
 import { log } from "../core/log.js";
 import { friendlyTime } from "../core/time.js";
-import type { HabitConfig, QuestOption, Stage } from "../core/types.js";
+import { STAGE_EMOJI, STAGE_NAMES, statusLine } from "../core/status.js";
+import type { HabitConfig, PetState, QuestOption } from "../core/types.js";
 import type { RunContext } from "./context.js";
 import type { Slot } from "./scheduler.js";
 
-const STAGE_EMOJI = ["🥚", "🐣", "🐥", "🐤", "🐦", "🦚"];
-const STAGE_NAMES = ["Egg", "Cracked", "Hatchling", "Child", "Teen", "Adult"];
 const NUMBERS = ["1️⃣", "2️⃣", "3️⃣"];
 
 export function formatQuest(
   ctx: RunContext,
-  stage: Stage,
+  state: PetState,
   options: QuestOption[],
   slot: Slot,
   durationMin: number,
@@ -23,7 +22,7 @@ export function formatQuest(
     ? `${first.material} (${first.sources.length} source${first.sources.length > 1 ? "s" : ""})`
     : first.material;
   const main = [
-    `${STAGE_EMOJI[stage]} *${ctx.config.pet.name}'s quest*`,
+    `${STAGE_EMOJI[state.stage]} *${ctx.config.pet.name}'s quest*`,
     "",
     `📖 *What:* ${first.what}`,
     `🕘 *When:* ${when}${slot.reason ? ` (${slot.reason})` : ""}`,
@@ -36,6 +35,8 @@ export function formatQuest(
       ? `React ${NUMBERS.slice(0, options.length).join(" ")} on this message to pick (other options in thread).`
       : "React 1️⃣ on this message to accept.",
     "When done, react ✅ on this message.",
+    "",
+    `_${statusLine(state, ctx.config)}_`,
   ]
     .filter((l, i, all) => l !== "" || all[i - 1] !== "")
     .join("\n");
