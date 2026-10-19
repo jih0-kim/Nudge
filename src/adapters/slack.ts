@@ -29,8 +29,8 @@ export async function postMessage(via: SlackVia, channel: string, text: string, 
   const thread = threadTs ? { thread_ts: threadTs } : {};
   const data =
     via === 'slackbot'
-      ? await executeTool('SLACKBOT_SEND_MESSAGE', { channel, markdown_text: toMarkdown(text), ...thread })
-      : await executeTool('SLACK_CHAT_POST_MESSAGE', { channel, text, ...thread });
+      ? await executeTool('SLACKBOT_SEND_MESSAGE', { channel, markdown_text: toMarkdown(text), unfurl_links: false, unfurl_media: false, ...thread })
+      : await executeTool('SLACK_CHAT_POST_MESSAGE', { channel, text, unfurl_links: false, unfurl_media: false, ...thread });
   return { channel: (data.channel ?? channel) as string, ts: (data.ts ?? data.message?.ts) as string };
 }
 
