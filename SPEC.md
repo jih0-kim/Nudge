@@ -26,7 +26,7 @@ Each run executes these roles in order. Every log line is prefixed with the role
 | 3 | **Scout** | Prepares 3 quest options with material | Parallel: Search, Task | quest text |
 | 4 | **Scheduler** | Picks a slot; on accept, creates the calendar event | Composio: Google Calendar | no |
 | 5 | **Messenger** | Sends the quest DM, evolution notices | Composio: Slack (bot) | no |
-| 6 | **Renderer** | Renders `nudgling.svg`, commits it to the profile repo | Composio: GitHub | no |
+| 6 | **Renderer** | Renders `nudgling.svg` locally; Slack shows the pet as a GIF (quest DMs, `status`) | none | no |
 
 Approval boundary: calendar events and profile commits happen only after the user reacts to accept.
 

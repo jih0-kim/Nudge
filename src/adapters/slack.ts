@@ -28,8 +28,20 @@ export async function whoAmI(): Promise<{ userId: string; team: string }> {
  * `text` uses Slack mrkdwn (*bold*); converted for the bot toolkit, which takes standard markdown.
  * With `imageUrl` (a public PNG/GIF), the image goes above the text as Block Kit blocks.
  */
-export async function postMessage(via: SlackVia, channel: string, text: string, threadTs?: string, imageUrl?: string) {
-  const common = { channel, unfurl_links: false, unfurl_media: false, ...(threadTs ? { thread_ts: threadTs } : {}) };
+export async function postMessage(
+  via: SlackVia,
+  channel: string,
+  text: string,
+  threadTs?: string,
+  imageUrl?: string,
+  broadcast = false, // a thread reply that also shows in the conversation, so it notifies
+) {
+  const common = {
+    channel,
+    unfurl_links: false,
+    unfurl_media: false,
+    ...(threadTs ? { thread_ts: threadTs, ...(broadcast ? { reply_broadcast: true } : {}) } : {}),
+  };
   const blocks = imageUrl
     ? [
         { type: 'image', image_url: imageUrl, alt_text: 'Nudgling' },
