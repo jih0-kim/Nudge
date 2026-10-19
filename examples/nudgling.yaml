@@ -1,0 +1,31 @@
+pet:
+  name: Nudgy
+  profile_repo: jih0-kim/jih0-kim
+  seed: jih0-kim
+
+channel: slack
+
+habits:
+  - id: paper-reading
+    label: Read papers
+    source: slack_thread
+    target_reps: 66
+    part: glasses
+    place: Home desk
+    duration: { start: 15m, min: 10m, max: 45m }
+    scout: "follow-up papers on VLA and robot manipulation I recently read"
+
+  - id: watch-repos
+    label: Watch repos I care about
+    source: slack_thread
+    watch: [pytorch/pytorch, PyTorchKR/Awesome-Physical-AI]
+    target_reps: 66
+    part: antenna
+    place: Anywhere
+    duration: { start: 10m, min: 5m, max: 20m }
+    scout: "what changed in these repos and why it matters"
+
+schedule:
+  quiet_hours: "23:00-08:00"
+  use_calendar: true
+  timezone: America/Los_Angeles

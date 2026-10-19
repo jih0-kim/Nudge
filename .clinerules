@@ -1,0 +1,7 @@
+# Rules for Cline in this repo
+- Follow SPEC.md. It is the source of truth for behavior and data shapes.
+- Do not change src/core/types.ts without telling the other track first. It is the contract between Track A and Track B.
+- Growth rules and rendering must stay deterministic pure functions. No LLM calls in src/core/rules.ts or src/pet/.
+- Character SVGs use SMIL animation only. No <style>, CSS, fonts, scripts, or external references (GitHub strips them).
+- Log each step with its role name prefix, e.g. [Watcher], [Keeper], [Scout], [Scheduler], [Messenger], [Renderer].
+- Never commit secrets. Use .env (see .env.example).

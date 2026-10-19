@@ -10,6 +10,7 @@ import { SlackSetup, type SlackInstallation } from './services/slack-setup.js';
 import { SlackRuntime } from './services/slack-runtime.js';
 import { AppConnections } from './services/app-connections.js';
 import { ComposioAppsProvider } from './adapters/composio-apps.js';
+import { scheduleRuns } from './core/run.js';
 
 const port = Number(process.env.PORT ?? 3000);
 
@@ -41,6 +42,10 @@ const timer = setInterval(() => {
   if (!running) running = Promise.resolve(runtime?.tick()).catch(() => console.error('Background worker failed')).finally(() => { running = undefined; });
 }, 1000);
 
+// Nudge loop (SPEC.md section 2). NUDGLING_INTERVAL_MIN=0 turns it off.
+const nudgeEvery = Number(process.env.NUDGLING_INTERVAL_MIN ?? 10);
+const stopNudges = nudgeEvery > 0 ? scheduleRuns(nudgeEvery) : async () => {};
+
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Nudgling is running at http://localhost:${info.port}`);
   console.log(`Private installer link (treat this like a password): ${process.env.APP_BASE_URL || `http://localhost:${info.port}`}/setup?token=${encodeURIComponent(setupToken)}`);
@@ -51,7 +56,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     clearInterval(timer);
     server.close(() => {
-      void Promise.resolve(running).finally(() => { store.close(); process.exit(0); });
+      void Promise.all([running, stopNudges()]).finally(() => { store.close(); process.exit(0); });
     });
   });
 }

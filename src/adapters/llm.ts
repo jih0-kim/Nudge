@@ -10,11 +10,11 @@ export function getLanguageModel() {
   return provider.chat(process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini');
 }
 
-export async function generateReply(prompt: string) {
+export async function generateReply(prompt: string, maxOutputTokens = 500) {
   const { text } = await generateText({
     model: getLanguageModel(),
     prompt,
-    maxOutputTokens: 500,
+    maxOutputTokens,
     maxRetries: 0,
     abortSignal: AbortSignal.timeout(30_000),
   });
