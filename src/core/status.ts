@@ -9,6 +9,14 @@ export const DEFAULT_EVENTS = process.env.NUDGLING_EVENTS ?? "state/events.jsonl
 
 export const STAGE_NAMES = ["Egg", "Cracked", "Hatchling", "Child", "Teen", "Adult"];
 export const STAGE_EMOJI = ["🥚", "🐣", "🐥", "🐤", "🐦", "🦚"];
+/** Animated GIFs of the stage assets (assets/gif, made from assets/*.svg), served from the public repo. */
+const GIF_BASE = process.env.NUDGLING_GIF_BASE ?? "https://raw.githubusercontent.com/jih0-kim/Nudge/main/assets/gif";
+const GIF_STAGES = 3; // stage0..stage2 exist so far; later stages reuse the last one
+
+export function petGifUrl(stage: number): string {
+  return `${GIF_BASE}/stage${Math.min(stage, GIF_STAGES - 1)}.gif`;
+}
+
 const MOOD = { sparkle: "✨ sparkly", normal: "🙂 fine", sleepy: "😴 sleepy" } as const;
 
 function bar(reps: number, target: number, width = 10): string {

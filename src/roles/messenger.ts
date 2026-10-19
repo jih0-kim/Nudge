@@ -2,7 +2,7 @@
 import { postMessage, whoAmI, type SlackVia } from "../adapters/slack.js";
 import { log } from "../core/log.js";
 import { friendlyTime } from "../core/time.js";
-import { STAGE_EMOJI, STAGE_NAMES, statusLine } from "../core/status.js";
+import { petGifUrl, STAGE_EMOJI, STAGE_NAMES, statusLine } from "../core/status.js";
 import type { HabitConfig, PetState, QuestOption } from "../core/types.js";
 import type { RunContext } from "./context.js";
 import type { Slot } from "./scheduler.js";
@@ -15,7 +15,7 @@ export function formatQuest(
   options: QuestOption[],
   slot: Slot,
   durationMin: number,
-): { main: string; thread?: string } {
+): { main: string; thread?: string; image: string } {
   const [first, ...rest] = options;
   const when = friendlyTime(slot.at, ctx.now, ctx.config.schedule.timezone);
   const prepared = first.sources.length
@@ -45,18 +45,18 @@ export function formatQuest(
     ? rest.map((o, i) => `${NUMBERS[i + 1]} *${o.what}*\n${o.material}${o.sources.map((s) => `\n   • ${s}`).join("")}`).join("\n\n") +
       "\n\nCan't react? Reply 1, 2, or 3 here."
     : undefined;
-  return { main, thread };
+  return { main, thread, image: petGifUrl(state.stage) };
 }
 
 /** Posts the quest and returns where it went, or undefined when it only went to the console. */
-export async function sendQuest(ctx: RunContext, habit: HabitConfig, text: { main: string; thread?: string }) {
+export async function sendQuest(ctx: RunContext, habit: HabitConfig, text: { main: string; thread?: string; image?: string }) {
   const via = slackVia(ctx);
   if (ctx.dry || !via) {
     log("Messenger", `${ctx.dry ? "[dry] " : "Slack not connected, "}quest for ${habit.id}:\n${indent(text.main)}`);
     if (text.thread) console.log(indent(text.thread));
     return undefined;
   }
-  const sent = await post(ctx, via, text.main);
+  const sent = await post(ctx, via, text.main, text.image);
   ctx.runtime.slack_channel = sent.channel;
   ctx.runtime.slack_via = via;
   if (text.thread) await postMessage(via, sent.channel, text.thread, sent.ts);
@@ -71,7 +71,7 @@ export async function announceEvolution(ctx: RunContext, from: number, to: numbe
     log("Messenger", `${ctx.dry ? "[dry] " : ""}${text}`);
     return;
   }
-  await post(ctx, via, text);
+  await post(ctx, via, text, petGifUrl(to));
   log("Messenger", `evolution notice sent (${STAGE_NAMES[from]} -> ${STAGE_NAMES[to]})`);
 }
 
@@ -85,15 +85,15 @@ function slackVia(ctx: RunContext): SlackVia | undefined {
  * Posts to the known channel. If that channel is gone for this sender (e.g. the Slackbot was reconnected as a
  * different app), falls back to the user's ID, which opens a fresh DM.
  */
-async function post(ctx: RunContext, via: SlackVia, text: string) {
+async function post(ctx: RunContext, via: SlackVia, text: string, imageUrl?: string) {
   const channel = await resolveChannel(ctx, via);
   try {
-    return await postMessage(via, channel, text);
+    return await postMessage(via, channel, text, undefined, imageUrl);
   } catch (error) {
     if (!/channel_not_found|not_in_channel/.test((error as Error).message) || channel !== ctx.runtime.slack_channel) throw error;
     log("Messenger", `${channel} is not reachable via ${via} anymore, opening a new DM`);
     ctx.runtime.slack_channel = undefined;
-    const sent = await postMessage(via, await resolveChannel(ctx, via), text);
+    const sent = await postMessage(via, await resolveChannel(ctx, via), text, undefined, imageUrl);
     ctx.runtime.slack_channel = sent.channel;
     return sent;
   }
