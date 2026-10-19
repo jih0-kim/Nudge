@@ -23,6 +23,7 @@ test('confirmed quests grow only their owner’s pet; repeats and activity notes
     assert.equal(observeConversation(store, alice, messages, 'B1'), false);
     assert.equal(personalPetStatus(store, alice.id, true).stage, i);
     assert.equal(personalPetStatus(store, alice.id, true).completed, i);
+    assert.ok(personalPetStatus(store, alice.id, true).imageUrl.endsWith(`/level-${String([0, 1, 7, 21, 42, 66][i]).padStart(2, '0')}.gif`));
   }
   store.log(alice.id, 'A separate activity note');
   assert.equal(personalPetStatus(store, alice.id, true).completed, 5);
@@ -80,7 +81,7 @@ test('completion delivery includes real growth and image, tracks the next quest,
   assert.match(text, /Quest: Review/);
   assert.match(text, /Completed quests: 1/);
   assert.match(text, /Cracked/);
-  assert.ok(imageUrl?.endsWith('/stage1.gif'));
+  assert.ok(imageUrl?.endsWith('/level-01.gif'));
   assert.equal(store.openQuest(user.id)?.message_id, '100.002');
   assert.equal(store.activity(user.id).length, 1);
   assert.equal(store.questProgress(user.id).completed, 1);

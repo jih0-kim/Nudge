@@ -86,13 +86,13 @@ export class SlackRuntime {
       try {
         const target = { workspaceId: user.team_id, channelId: user.channel_id };
         const { messages, botId } = await sender.conversation(target);
-        let completed = observeConversation(this.store, user, messages, botId);
+        let changed = observeConversation(this.store, user, messages, botId);
         const open = this.store.openQuest(user.id);
         if (open && !messages.some((m) => m.ts === open.message_id)) {
           const older = await sender.conversation(target, open.message_id);
-          completed = observeConversation(this.store, user, older.messages, older.botId) || completed;
+          changed = observeConversation(this.store, user, older.messages, older.botId) || changed;
         }
-        if (completed) await this.tick();
+        if (changed) await this.tick();
       } catch { console.warn('Conversation update check failed', JSON.stringify({ userId: user.id })); }
     }
   }

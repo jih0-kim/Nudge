@@ -22,7 +22,7 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
         const target = { workspaceId: user.team_id, channelId: user.channel_id };
         let response = job.reply;
         let messageId = job.message_id ?? undefined;
-        if ((job.kind === 'message' || job.kind === 'quest_completion') && response === null && !messageId && sender.start) {
+        if ((job.kind === 'message' || job.kind === 'quest_completion' || job.kind === 'quest_skip') && response === null && !messageId && sender.start) {
           try {
             messageId = await sender.start(target, job.id);
             store.saveMessageId(job.id, messageId);
@@ -30,7 +30,7 @@ export function createWorker(store: Store, sender: MessageSender, reply = replyT
           } catch { /* A missing progress indicator must never prevent a reply. */ }
         }
         if (response === null) {
-          try { response = await reply(store, user, job.text, undefined, { questCompleted: job.kind === 'quest_completion' }); }
+          try { response = await reply(store, user, job.text, undefined, { questCompleted: job.kind === 'quest_completion', questSkipped: job.kind === 'quest_skip' }); }
           catch (error) {
             // Do not replay model mutations on network delivery retries.
             response = 'My AI response failed just now—this is a server problem, not your message. Simple commands such as "help" still work. If you asked me to save or change something, check "memory", "reminders", or "progress" before retrying.';

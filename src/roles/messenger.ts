@@ -2,7 +2,9 @@
 import { postMessage, whoAmI, type SlackVia } from "../adapters/slack.js";
 import { log } from "../core/log.js";
 import { friendlyTime } from "../core/time.js";
+import { isOpen, questStatuses } from "../core/quests.js";
 import { petGifUrl, STAGE_EMOJI, STAGE_NAMES, statusLine } from "../core/status.js";
+import { petLevel } from "../pet/render.js";
 import type { HabitConfig, PetState, QuestOption } from "../core/types.js";
 import type { RunContext } from "./context.js";
 import type { Slot } from "./scheduler.js";
@@ -34,7 +36,7 @@ export function formatQuest(
     rest.length
       ? `React ${NUMBERS.slice(0, options.length).join(" ")} on this message to pick (other options in thread).`
       : "React 1️⃣ on this message to accept.",
-    "When done, react ✅ on this message.",
+    "When done, react ✅ on this message. Not feeling it? React ❌ and I'll suggest something else.",
     "",
     `_${statusLine(state, ctx.config)}_`,
   ]
@@ -45,7 +47,7 @@ export function formatQuest(
     ? rest.map((o, i) => `${NUMBERS[i + 1]} *${o.what}*\n${o.material}${o.sources.map((s) => `\n   • ${s}`).join("")}`).join("\n\n") +
       "\n\nCan't react? Reply 1, 2, or 3 here."
     : undefined;
-  return { main, thread, image: petGifUrl(state.stage) };
+  return { main, thread, image: petGifUrl(petLevel(state)) };
 }
 
 /** Posts the quest and returns where it went, or undefined when it only went to the console. */
@@ -64,15 +66,46 @@ export async function sendQuest(ctx: RunContext, habit: HabitConfig, text: { mai
   return sent;
 }
 
-export async function announceEvolution(ctx: RunContext, from: number, to: number) {
+export async function announceEvolution(ctx: RunContext, from: number, to: number, state: PetState) {
   const text = `${STAGE_EMOJI[to]} *${ctx.config.pet.name} evolved!* ${STAGE_NAMES[from]} → *${STAGE_NAMES[to]}*`;
   const via = slackVia(ctx);
   if (ctx.dry || !via) {
     log("Messenger", `${ctx.dry ? "[dry] " : ""}${text}`);
     return;
   }
-  await post(ctx, via, text, petGifUrl(to));
+  await post(ctx, via, text, petGifUrl(petLevel(state)));
   log("Messenger", `evolution notice sent (${STAGE_NAMES[from]} -> ${STAGE_NAMES[to]})`);
+}
+
+const REMIND_AFTER_MS = 24 * 3_600_000;
+
+/** One gentle reminder, in the quest's thread, for a quest still open 24 hours after it was proposed. */
+export async function remindOnce(ctx: RunContext) {
+  const via = slackVia(ctx);
+  const reminded = new Set(ctx.runtime.reminded ?? []);
+  for (const q of questStatuses(ctx.events).values()) {
+    const id = q.proposed.quest_id;
+    const ts = q.proposed.slack_ts;
+    if (!ts || reminded.has(id) || !isOpen(q, ctx.now)) continue;
+    if (ctx.now.getTime() - new Date(q.proposed.ts).getTime() < REMIND_AFTER_MS) continue;
+
+    const option = q.proposed.options.find((o) => o.id === q.accepted?.option) ?? q.proposed.options[0];
+    const text = `⏰ Still up for this? *${option.what}* (${q.proposed.duration_min} min)\nReact ✅ on the quest when done, or ❌ for something else.`;
+    if (ctx.dry || !via) {
+      log("Messenger", `${ctx.dry ? "[dry] " : ""}reminder for ${id}: ${option.what}`);
+      continue;
+    }
+    const channel = ctx.runtime.quest_channels?.[id] ?? ctx.runtime.slack_channel;
+    if (!channel) continue;
+    try {
+      await postMessage(via, channel, text, ts, undefined, true);
+      reminded.add(id);
+      log("Messenger", `reminder sent for ${id}`);
+    } catch (error) {
+      log("Messenger", `reminder for ${id} failed: ${(error as Error).message}`);
+    }
+  }
+  ctx.runtime.reminded = [...reminded];
 }
 
 /** The bot when connected, so the user gets notified; else the user's own Slack connection. */

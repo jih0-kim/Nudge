@@ -7,13 +7,14 @@ export type Runtime = {
   slack_user?: string; // the connected Slack user's ID, the key of their coach memory
   slack_via?: SlackVia; // who sent to that channel; a bot DM and a self DM are different channels
   quest_channels?: Record<string, string>; // quest_id -> channel it was sent to, when that differs over time
+  reminded?: string[]; // quest_ids that already got their one reminder
 };
 
 export type RunContext = {
   config: Config;
   events: Event[]; // everything known so far, including events found earlier in this run
   now: Date;
-  dry: boolean; // read only: no Slack posts, calendar events, commits, or event writes
+  dry: boolean; // no Slack posts, calendar events, or event writes; pet SVG still renders locally
   liveDemo?: boolean; // one quest at a time; only a checkmark completes it
   toolkits: Set<string>; // Composio toolkits with an active connection
   runtime: Runtime;

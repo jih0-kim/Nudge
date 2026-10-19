@@ -26,6 +26,10 @@ contextual replies; they can change the plan even while a quest is unfinished.
 Idle conversations stay silent, without AI calls. React **✅ on Nudge's "Quest:"
 message** to log completion and trigger the next suggestion. Thread text alone does
 not complete a task. Repeated checks of the same reaction never repeat completion.
+React **❌** on the quest for a different suggestion, without logging completion or
+growing the pet. Only the quest owner's reaction counts; ✅ takes precedence if both
+are present. The incoming 24-hour thread reminder remains part of the separate
+file-based quest loop, not an unsolicited native-DM notification.
 
 Set `NUDGLING_INTERVAL_SECONDS` in `.env` to any supported interval in seconds
 (for example `20`, `60`, or `3600`), then restart the server. `0` disables the loop.
@@ -46,6 +50,8 @@ Hatchling → Child → Teen → Adult after five quests. Set `NUDGLING_DEMO=0` 
 long-term milestones at 1, 7, 21, 42, and 66 quests. Generic `done` / activity notes
 are logged separately and do not count as checked-off quests. Native status no
 longer shows unrelated sample habits from the old file-based demo.
+Both pet flows use the level-00 through level-66 GIFs. Native demo milestones map
+to the matching artwork, so Child, Teen, and Adult no longer reuse the hatchling.
 
 ### Optional bounded demo
 

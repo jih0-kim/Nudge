@@ -26,9 +26,9 @@ Each run executes these roles in order. Every log line is prefixed with the role
 | 3 | **Scout** | Prepares 3 quest options with material | Parallel: Search, Task | quest text |
 | 4 | **Scheduler** | Picks a slot; on accept, creates the calendar event | Composio: Google Calendar | no |
 | 5 | **Messenger** | Sends the quest DM, evolution notices | Composio: Slack (bot) | no |
-| 6 | **Renderer** | Renders `nudgling.svg`, commits it to the profile repo | Composio: GitHub | no |
+| 6 | **Renderer** | Renders `nudgling.svg` locally; Slack shows the pet as a GIF (quest DMs, `status`) | none | no |
 
-Approval boundary: calendar events and profile commits happen only after the user reacts to accept.
+Approval boundary: calendar events happen only after the user reacts to accept. Rendering does not commit to a profile repository.
 
 ## 3. Contracts (agree on these first, then work in parallel)
 
@@ -63,6 +63,7 @@ type Event =
       options: QuestOption[]; slot: string; duration_min: number; slack_ts?: string }
   | { ts: string; type: "quest_accepted"; quest_id: string; option: string;
       declined: string[]; client: string }
+  | { ts: string; type: "quest_skipped"; quest_id: string; client: string }   // ❌ on the quest
   | { ts: string; type: "calendar_event_created"; quest_id: string; event_id: string }
   | { ts: string; type: "quest_completed"; quest_id: string; habit: string;
       evidence: { kind: "slack_thread" | "github" | "mcp"; text?: string; url?: string };
@@ -180,12 +181,12 @@ Two tracks that meet at `computeState` / `renderPet` and the `Event` type.
 | Owns | `core/`, `pet/`, `roles/renderer.ts`, `surfaces/cli.ts` | `adapters/`, `roles/watcher.ts`, `scout.ts`, `scheduler.ts`, `messenger.ts` |
 | 12:15 | types, config loader, sample events | Composio: Slack bot DM sends; Parallel call works |
 | 13:00 | `computeState` + `renderPet` (stages 0 to 2), `demo` command | quest DM with mock options; read reactions and thread replies |
-| 13:40 | profile repo commit via Composio GitHub | Scout with Parallel; calendar free slot + event creation |
+| 13:40 | Slack pet GIF and local SVG rendering | Scout with Parallel; calendar free slot + event creation |
 | 14:15 | **integration:** `run` wires both tracks end to end | |
 | 14:15 to 14:55 | MCP server (whoever is free first) | demo dry run, fix flaky steps |
 | 14:55 to 15:15 | README, LICENSE, `.env.example`, submit | |
 
-Cut order if behind: MCP → calendar → Parallel. Never cut: Slack loop and profile commit.
+Cut order if behind: MCP → calendar → Parallel. Never cut: Slack loop and visible pet growth.
 
 ## 9. Environment
 
@@ -204,7 +205,7 @@ NUDGLING_DEMO=0
 | Criterion | Evidence |
 |---|---|
 | Usefulness | Real habits (paper reading, repo watching), research-based growth |
-| Working execution | Slack quest → accept → calendar event → thread reply → profile commit, live |
+| Working execution | Slack quest → accept → calendar event → completion → updated pet in Slack, live |
 | Originality | Gets you to do it; research-based stages; per-platform history |
 | Reproducibility | Public repo, MIT, env names, example config, sample events, keyless `demo` |
 

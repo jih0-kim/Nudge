@@ -2,6 +2,7 @@ import type { Store } from './store.js';
 import { loadConfig } from './config.js';
 import { stageFor, thresholdsFor } from './rules.js';
 import { DEFAULT_CONFIG, petGifUrl, STAGE_EMOJI, STAGE_NAMES } from './status.js';
+import { growthLevel } from '../pet/render.js';
 
 /** Native DM growth uses only this person's unique, confirmed quest completions. */
 export function personalPetStatus(store: Store, userId: number, demo = process.env.NUDGLING_DEMO !== '0') {
@@ -18,5 +19,5 @@ export function personalPetStatus(store: Store, userId: number, demo = process.e
     next === undefined ? 'Fully grown! Keep completing quests to build your habit.'
       : `${next - completed} more ✅ to ${STAGE_NAMES[stage + 1]}.`,
   ].join('\n');
-  return { text, imageUrl: petGifUrl(stage), stage, completed };
+  return { text, imageUrl: petGifUrl(growthLevel(completed, 66, demo)), stage, completed };
 }

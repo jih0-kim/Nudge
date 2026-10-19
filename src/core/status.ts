@@ -2,6 +2,7 @@
 import { loadConfig } from "./config.js";
 import { readEvents } from "./events.js";
 import { computeState, thresholdsFor } from "./rules.js";
+import { petLevel } from "../pet/render.js";
 import type { Config, PetState } from "./types.js";
 
 export const DEFAULT_CONFIG = process.env.NUDGLING_CONFIG ?? "examples/nudgling.yaml";
@@ -9,12 +10,11 @@ export const DEFAULT_EVENTS = process.env.NUDGLING_EVENTS ?? "state/events.jsonl
 
 export const STAGE_NAMES = ["Egg", "Cracked", "Hatchling", "Child", "Teen", "Adult"];
 export const STAGE_EMOJI = ["🥚", "🐣", "🐥", "🐤", "🐦", "🦚"];
-/** Animated GIFs of the stage assets (assets/gif, made from assets/*.svg), served from the public repo. */
+/** One animated GIF per growth level (assets/gif/level-NN.gif, see scripts/make-gifs.mjs), served from the public repo. */
 const GIF_BASE = process.env.NUDGLING_GIF_BASE ?? "https://raw.githubusercontent.com/jih0-kim/Nudge/main/assets/gif";
-const GIF_STAGES = 3; // stage0..stage2 exist so far; later stages reuse the last one
 
-export function petGifUrl(stage: number): string {
-  return `${GIF_BASE}/stage${Math.min(stage, GIF_STAGES - 1)}.gif`;
+export function petGifUrl(level: number): string {
+  return `${GIF_BASE}/level-${String(Math.max(0, Math.min(66, level))).padStart(2, "0")}.gif`;
 }
 
 /**
@@ -63,5 +63,5 @@ export function statusLine(state: PetState, config: Config): string {
 export function currentStatus(configPath = DEFAULT_CONFIG, eventsPath = DEFAULT_EVENTS, now = new Date()) {
   const config = loadConfig(configPath);
   const state = computeState(readEvents(eventsPath), config, now);
-  return { text: formatStatus(state, config), imageUrl: petGifUrl(state.stage) };
+  return { text: formatStatus(state, config), imageUrl: petGifUrl(petLevel(state)) };
 }

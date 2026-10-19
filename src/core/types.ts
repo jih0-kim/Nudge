@@ -37,6 +37,13 @@ export type QuestAccepted = {
   client: Client;
 };
 
+export type QuestSkipped = {
+  ts: string;
+  type: "quest_skipped";
+  quest_id: string;
+  client: Client;
+};
+
 export type CalendarEventCreated = {
   ts: string;
   type: "calendar_event_created";
@@ -71,6 +78,7 @@ export type Evolved = {
 export type Event =
   | QuestProposed
   | QuestAccepted
+  | QuestSkipped
   | CalendarEventCreated
   | QuestCompleted
   | ActivityLogged

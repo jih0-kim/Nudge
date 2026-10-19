@@ -58,3 +58,37 @@ test('command replies retain context and greetings do not restart onboarding', a
   await replyToUser(store, user, 'forget memory');
   assert.deepEqual(store.history(user.id), []);
 });
+
+test('native owner skip queues a different quest once without activity or pet growth', (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1');
+  const message: ConversationMessage = { ts: '100.001', bot_id: 'B1', text: 'Quest: Try this',
+    reactions: [{ name: 'x', users: ['U2'] }] };
+  assert.equal(observeConversation(store, user, [message], 'B1'), false);
+  message.reactions = [{ name: 'x', users: ['U1'] }];
+  assert.equal(observeConversation(store, user, [message], 'B1'), true);
+  assert.equal(observeConversation(store, user, [message], 'B1'), false);
+  assert.equal(store.openQuest(user.id), undefined);
+  assert.equal(store.questProgress(user.id).completed, 0);
+  assert.deepEqual(store.activity(user.id), []);
+  const job = store.claim()!;
+  assert.equal(job.kind, 'quest_skip');
+  assert.match(job.text, /skipped this quest/);
+  store.finish(job);
+  assert.equal(store.claim(), undefined);
+  assert.equal(store.completeQuest(user.id, message.ts), false);
+});
+
+test('native owner checkmark wins over skip, but another person’s checkmark does not', (t) => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const user = store.user('T1', 'U1', 'D1');
+  const message: ConversationMessage = { ts: '100.001', bot_id: 'B1', text: 'Quest: Try this',
+    reactions: [{ name: 'white_check_mark', users: ['U1'] }, { name: 'x', users: ['U1'] }] };
+  assert.equal(observeConversation(store, user, [message], 'B1'), true);
+  assert.equal(store.questProgress(user.id).completed, 1);
+  assert.equal(store.claim()!.kind, 'quest_completion');
+  message.ts = '100.002';
+  message.reactions = [{ name: 'white_check_mark', users: ['U2'] }, { name: 'x', users: ['U1'] }];
+  assert.equal(observeConversation(store, user, [message], 'B1'), true);
+  assert.equal(store.questProgress(user.id).completed, 1);
+});

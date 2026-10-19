@@ -18,5 +18,9 @@ export function observeConversation(store: Store, user: User, messages: Conversa
   store.trackQuest(user.id, quest.ts, quest.text!);
   const checked = quest.reactions?.some((r) => ['white_check_mark', 'heavy_check_mark', 'ballot_box_with_check'].includes(r.name)
     && r.users?.includes(user.slack_id));
-  return checked ? store.completeQuest(user.id, quest.ts) : false;
+  // A completion takes precedence when the owner has reacted both ✅ and ❌.
+  if (checked) return store.completeQuest(user.id, quest.ts);
+  const skipped = quest.reactions?.some((r) => ['x', 'no_entry', 'no_entry_sign', 'negative_squared_cross_mark'].includes(r.name)
+    && r.users?.includes(user.slack_id));
+  return skipped ? store.skipQuest(user.id, quest.ts) : false;
 }

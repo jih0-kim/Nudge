@@ -62,7 +62,7 @@ async function demo() {
   log("Keeper", `final: ${describe(computeState(seen, cfg, new Date(seen.at(-1)!.ts)))}`);
 }
 
-/** One pass of the loop. --dry reads Slack but sends, books, commits, and writes nothing. */
+/** One pass of the loop. --dry reads Slack but sends, books, and writes no events. */
 async function run() {
   await runLoop({ configPath: CONFIG, eventsPath: EVENTS, dry: process.argv.includes("--dry") });
 }

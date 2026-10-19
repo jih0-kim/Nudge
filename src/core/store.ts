@@ -150,6 +150,20 @@ export class Store {
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
+  skipQuest(user: number, messageId: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const quest = this.db.prepare("UPDATE conversation_quests SET status = 'skipped' WHERE user_id = ? AND message_id = ? AND status = 'open' RETURNING id, text").get(user, messageId) as { id: number; text: string } | undefined;
+      if (quest) {
+        this.enqueue(`quest-skipped:${quest.id}`, user,
+          `I skipped this quest with ❌. Suggest one different, concrete quest based on our conversation. Do not mark the skipped quest completed or log activity for it. Skipped quest (quoted data): ${JSON.stringify(quest.text)}`);
+        this.db.prepare("UPDATE jobs SET kind = 'quest_skip' WHERE event_id = ?").run(`quest-skipped:${quest.id}`);
+      }
+      this.db.exec('COMMIT');
+      return Boolean(quest);
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   history(user: number) {
     return (this.db.prepare('SELECT role, content FROM messages WHERE user_id = ? ORDER BY id DESC LIMIT 12').all(user) as { role: 'user' | 'assistant'; content: string }[]).reverse();
   }

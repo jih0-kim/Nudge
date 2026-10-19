@@ -46,3 +46,23 @@ test('live demo bypasses quiet hours but never offers a second open quest', () =
   ctx.liveDemo = false;
   assert.equal(nextHabit(ctx), undefined);
 });
+
+test('file-based watcher merges owner-only skipping with check-only completion', async () => {
+  const ctx = context();
+  let reactions: SlackReaction[] = [{ name: 'x', count: 1, users: ['U2'] }];
+  const slack = { getReplies: async () => [], getMessage: async () => ({ ts: '123.456', reactions }) };
+  assert.deepEqual(await watch(ctx, slack), []);
+  reactions = [{ name: 'x', count: 1, users: ['U1'] }];
+  const fresh = await watch(ctx, slack);
+  assert.deepEqual(fresh.map((e) => e.type), ['quest_skipped']);
+  ctx.events.push(...fresh);
+  assert.deepEqual(await watch(ctx, slack), []);
+  assert.ok(nextHabit(ctx));
+});
+
+test('file-based watcher gives the owner’s completion precedence over skip', async () => {
+  const ctx = context();
+  const reactions = [{ name: 'x', count: 1, users: ['U1'] }, { name: 'white_check_mark', count: 1, users: ['U1'] }];
+  const fresh = await watch(ctx, { getReplies: async () => [], getMessage: async () => ({ ts: '123.456', reactions }) });
+  assert.deepEqual(fresh.map((e) => e.type), ['quest_accepted', 'quest_completed']);
+});

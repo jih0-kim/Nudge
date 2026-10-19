@@ -1,5 +1,5 @@
 // `nudgling run`: one pass of the loop in SPEC.md section 2.
-// Watcher -> Keeper -> Scheduler (book) -> Scout -> Scheduler (slot) -> Messenger -> Renderer
+// Watcher -> Keeper -> Scheduler (book) -> Scout -> Scheduler (slot) -> Messenger (quest, reminders) -> Renderer
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readCoachMemory } from "../adapters/coach-memory.js";
@@ -7,7 +7,7 @@ import { connectedToolkits } from "../adapters/composio.js";
 import { whoAmI } from "../adapters/slack.js";
 import type { Runtime, RunContext } from "../roles/context.js";
 import { keep } from "../roles/keeper.js";
-import { announceEvolution, formatQuest, sendQuest } from "../roles/messenger.js";
+import { announceEvolution, formatQuest, remindOnce, sendQuest } from "../roles/messenger.js";
 import { render } from "../roles/renderer.js";
 import { book, pickSlot } from "../roles/scheduler.js";
 import { scout } from "../roles/scout.js";
@@ -80,8 +80,9 @@ export async function run({
     ]);
   }
 
-  if (evolved?.type === "evolved") await announceEvolution(ctx, evolved.from, evolved.to);
-  await render(ctx, state, fresh.some((e) => e.type === "quest_completed" || e.type === "evolved"));
+  if (evolved?.type === "evolved") await announceEvolution(ctx, evolved.from, evolved.to, state);
+  await remindOnce(ctx);
+  render(ctx, state);
 
   if (dry) {
     log("Run", `[dry] ${fresh.length} events not written: ${fresh.map((e) => e.type).join(", ") || "none"}`);

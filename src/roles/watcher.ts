@@ -9,6 +9,7 @@ import type { RunContext } from "./context.js";
 const REACTION_TO_INDEX: Record<string, number> = { one: 0, two: 1, three: 2 };
 const PICK_REPLY = /^\s*([123])\s*$/;
 const DONE_REACTIONS = ["white_check_mark", "heavy_check_mark", "ballot_box_with_check"];
+const SKIP_REACTIONS = ["x", "no_entry", "no_entry_sign", "negative_squared_cross_mark"];
 
 export async function watch(ctx: RunContext, slack = { getReplies, getMessage }): Promise<Event[]> {
   if (!ctx.toolkits.has("slack") || !ctx.runtime.slack_channel) {
@@ -19,7 +20,7 @@ export async function watch(ctx: RunContext, slack = { getReplies, getMessage })
   const found: Event[] = [];
   for (const q of questStatuses(ctx.events).values()) {
     const ts = q.proposed.slack_ts;
-    if (q.completed || !ts || isStale(q, ctx.now)) continue;
+    if (q.completed || q.skipped || !ts || isStale(q, ctx.now)) continue;
     const channel = ctx.runtime.quest_channels?.[q.proposed.quest_id] ?? ctx.runtime.slack_channel;
 
     // Our own posts carry bot_id (sent through the Composio app); the user's replies do not.
@@ -42,6 +43,13 @@ export async function watch(ctx: RunContext, slack = { getReplies, getMessage })
     }
 
     const option = q.proposed.options.find((o) => o.id === accepted?.option) ?? q.proposed.options[0];
+    // ✅ wins over ❌ if both are there: the work got done.
+    const done = reactions?.some((r) => DONE_REACTIONS.includes(r.name));
+    if (!done && reactions?.some((r) => SKIP_REACTIONS.includes(r.name))) {
+      found.push({ ts: ctx.now.toISOString(), type: "quest_skipped", quest_id: q.proposed.quest_id, client: "slack" });
+      log("Watcher", `${q.proposed.quest_id} skipped, a different quest comes next`);
+      continue;
+    }
     const evidence = await findEvidence(q.proposed.quest_id, replies, reactions, option.what, ctx.now, ctx.liveDemo);
     if (!evidence) continue;
     if (!accepted) {
