@@ -2,7 +2,9 @@
 // Watcher -> Keeper -> Scheduler (book) -> Scout -> Scheduler (slot) -> Messenger -> Renderer
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readCoachMemory } from "../adapters/coach-memory.js";
 import { connectedToolkits } from "../adapters/composio.js";
+import { whoAmI } from "../adapters/slack.js";
 import type { Runtime, RunContext } from "../roles/context.js";
 import { keep } from "../roles/keeper.js";
 import { announceEvolution, formatQuest, sendQuest } from "../roles/messenger.js";
@@ -47,7 +49,7 @@ export async function run({ configPath, eventsPath, dry = false, now = new Date(
   const habit = nextHabit(ctx);
   if (habit) {
     const duration = state.nextDurationMin[habit.id];
-    const options = await scout(habit, duration, ctx.events);
+    const options = await scout(habit, duration, ctx.events, await coachMemory(ctx));
     const slot = pickSlot(habit.id, ctx.events, config, now);
     log("Scheduler", `${habit.id}: ${slot.at.toISOString()}${slot.reason ? ` (${slot.reason})` : ""}`);
     const questId = `q-${now.getTime().toString(36)}`;
@@ -97,6 +99,14 @@ function nextHabit(ctx: RunContext): HabitConfig | undefined {
   const lastProposed = (id: string) =>
     quests.filter((q) => q.proposed.habit === id).map((q) => q.proposed.ts).sort().at(-1) ?? "";
   return candidates.sort((a, b) => lastProposed(a.id).localeCompare(lastProposed(b.id)))[0];
+}
+
+/** The Slack coach's memory for the connected user, if the coach has seen them. */
+async function coachMemory(ctx: RunContext): Promise<string | undefined> {
+  if (!ctx.runtime.slack_user && ctx.toolkits.has("slack")) {
+    ctx.runtime.slack_user = await whoAmI().then((me) => me.userId).catch(() => undefined);
+  }
+  return ctx.runtime.slack_user ? readCoachMemory(ctx.runtime.slack_user) : undefined;
 }
 
 function readRuntime(path: string): Runtime {
